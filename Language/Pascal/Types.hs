@@ -16,7 +16,8 @@ data SrcPos a = SrcPos {
 data TypeAnn a = TypeAnn {
   tContent :: a,
   srcPos :: SrcPos a,
-  typeOf :: Type }
+  typeOf :: Type,
+  localSymbols :: M.Map Id Symbol }
   deriving (Eq)
 
 instance (Show a) => Show (TypeAnn a) where
@@ -26,7 +27,8 @@ withType :: SrcPos a -> Type -> TypeAnn a
 withType p t = TypeAnn {
   tContent = content p,
   srcPos   = p,
-  typeOf   = t }
+  typeOf   = t,
+  localSymbols = M.empty}
 
 type node :~ ann = ann (node ann)
 

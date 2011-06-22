@@ -67,7 +67,8 @@ returnT t x res =
                         content = res,
                         srcLine = srcLine x,
                         srcColumn = srcColumn x },
-             typeOf = t }
+             typeOf = t,
+             localSymbols = M.empty}
 
 failT :: String -> Check b
 failT msg = do
@@ -145,11 +146,24 @@ instance Typed Program where
       return $ TypeAnn {
         tContent = program,
         srcPos = SrcPos program 0 0,
-        typeOf = TVoid }
+        typeOf = TVoid,
+        localSymbols = makeSymbolTable vars'}
     where
       argTypes :: Function TypeAnn -> [Type]
       argTypes (Function {..}) = map argType fnFormalArgs
+
       argType (TypeAnn {tContent = _ ::: tp}) = tp
+
+makeSymbolTable :: [TypeAnn NameType] -> M.Map Id Symbol
+makeSymbolTable xs = M.fromList $ map pair xs
+  where
+    pair :: TypeAnn NameType -> (Id, Symbol)
+    pair (TypeAnn {..}) = let (name ::: tp) = tContent
+                          in  (name, Symbol {
+                                       symbolName = name,
+                                       symbolType = tp,
+                                       symbolDefLine = srcLine srcPos,
+                                       symbolDefCol = srcColumn srcPos })
 
 instance Typed Statement where
   typeCheck x@(content -> Assign name expr) = do
@@ -218,7 +232,7 @@ instance Typed Function where
       result <- returnT fnResultType x fn
       dropSymbolTable
       addSymbol pos
-      return result
+      return $ result {localSymbols = makeSymbolTable vars}
     where
       varType v = do
         let (_ ::: tp) = content v
