@@ -1,10 +1,11 @@
-
+{-# LANGUAGE RecordWildCards, TypeOperators, StandaloneDeriving, FlexibleContexts, UndecidableInstances #-}
 module Language.Pascal.Parser where
 
 import Data.Char
 import Text.Parsec
 import qualified Text.Parsec.Token as P
 import Text.Parsec.Language
+import Text.Parsec.Expr
 
 import Language.Pascal.Types
 
@@ -13,68 +14,76 @@ type Parser a = Parsec String () a
 pascal = P.makeTokenParser $ javaStyle {
            P.commentStart = "(*",
            P.commentEnd = "*)",
-           P.reservedNames = ["program", "function", "begin", "end", "var",
-                             "return", "if", "then", "else", "for", "to", "do"] }
+           P.reservedNames = ["program", "function", "begin", "end", "var", "true", "false",
+                             ":=", "return", "if", "then", "else", "for", "to", "do"] }
 
 symbol = P.symbol pascal
+reserved = P.reserved pascal
+reservedOp = P.reservedOp pascal
 identifier = P.identifier pascal
 semi = P.semi pascal
 colon = P.colon pascal
 comma = P.comma pascal
+dot = P.dot pascal
 parens = P.parens pascal
 
 annotate p = do
   pos <- getPosition
   x <- p
-  return $ Ann {
+  return $ SrcPos {
     content = x,
     srcLine = sourceLine pos,
     srcColumn = sourceColumn pos }
 
-pProgram :: Parser Program
-pProgram = do
-  symbol "program"
+pProgram :: Parser (Program :~ SrcPos)
+pProgram = annotate $ do
+  reserved "program"
   identifier
   semi
   vars <- option [] pVars
   fns <- many pFunction
-  symbol "begin"
+  reserved "begin"
   sts <- pStatement `sepEndBy1` semi 
-  symbol "end."
+  reserved "end"
+  dot
   return $ Program vars fns sts
 
 readType str =
   case map toLower str of
     "integer" -> TInteger
-    "string" -> TString
+    "string"  -> TString
     "boolean" -> TBool
+    "void"    -> TVoid
     s         -> error $ "Unknown type: " ++ s
 
-pVars :: Parser [Ann NameType]
+pVars :: Parser [SrcPos NameType]
 pVars = do
-  symbol "var"
+  reserved "var"
   pNameType `sepEndBy1` semi 
 
-pNameType :: Parser (Ann NameType)
+pNameType :: Parser (SrcPos NameType)
 pNameType = annotate $ do
   name <- identifier
   colon
   tp <- identifier
   return $ name ::: readType tp
 
-pFunction :: Parser (Ann Function)
+pFunction :: Parser (Function :~ SrcPos)
 pFunction = annotate $ do
-  symbol "function"
+  reserved "function"
   name <- identifier
   args <- parens $ pNameType `sepBy` comma
+  colon
+  res <- identifier
   semi
   vars <- option [] pVars
-  symbol "begin"
+  reserved "begin"
   body <- pStatement `sepEndBy1` semi
-  symbol "end;"
-  return $ Function name args vars body
+  reserved "end"
+  semi
+  return $ Function name args (readType res) vars body
 
-pStatement :: Parser (Ann Statement)
+pStatement :: Parser (Statement :~ SrcPos)
 pStatement =
       try pAssign
   <|> try pProcedureCall
@@ -82,7 +91,7 @@ pStatement =
   <|> try pIfThenElse
   <|> pFor
 
-pAssign :: Parser (Ann Statement)
+pAssign :: Parser (Statement :~ SrcPos)
 pAssign = annotate $ do
   var <- identifier
   symbol ":="
@@ -94,74 +103,97 @@ pProcedureCall = annotate $ do
   args <- parens $ pExpression `sepBy` comma
   return $ Procedure name args
 
-pReturn :: Parser (Ann Statement)
+pReturn :: Parser (Statement :~ SrcPos)
 pReturn = annotate $ do
-  symbol "return"
+  reserved "return"
   x <- pExpression
   return $ Return x
 
-pIfThenElse :: Parser (Ann Statement)
+pIfThenElse :: Parser (Statement :~ SrcPos)
 pIfThenElse = annotate $ do
-  symbol "if"
+  reserved "if"
   cond <- pExpression
-  symbol "then"
+  reserved "then"
   ok <- pBlock
   el <- option [] $ do
-          symbol "else"
+          reserved "else"
           pBlock
   return $ IfThenElse cond ok el
 
 pBlock = try (one `fmap` pStatement) <|> do
-           symbol "begin"
+           reserved "begin"
            sts <- pStatement `sepEndBy1` semi
-           symbol "end;"
+           reserved "end"
+           semi
            return sts
   where
     one x = [x]
 
 pFor = annotate $ do
-  symbol "for"
+  reserved "for"
   var <- identifier
-  symbol ":="
+  reserved ":="
   start <- pExpression
-  symbol "to"
+  reserved "to"
   end <- pExpression
+  reserved "do"
   sts <- pBlock
   return $ For var start end sts
 
-pExpression :: Parser (Ann Expression)
-pExpression = 
-      try (annotate $ Literal `fmap` pLiteral)
-  <|> try pVariable
-  <|> try (parens pExpression)
-  <|> try pBinaryOp
-  <|> pCall
+pExpression :: Parser (Expression :~ SrcPos)
+pExpression = buildExpressionParser table term <?> "expression"
+  where
+    table = [
+            [binary "^" (Pow) AssocLeft],
+            [binary "*" (Mul) AssocLeft, binary "/" (Div) AssocLeft, binary "%" (Mod) AssocLeft ]
+          , [binary "+" (Add) AssocLeft, binary "-" (Sub)   AssocLeft ]
+          ]
+    binary  name fun assoc = Infix (op name fun) assoc
+    op name fun = do
+      pos <- getPosition
+      reservedOp name
+      return $ \x y -> SrcPos {
+        content = Op fun x y,
+        srcLine = sourceLine pos,
+        srcColumn = sourceColumn pos }
 
-pLiteral = try stringLit <|> try intLit <|> try boolLit
+
+term = parens pExpression
+   <|> (annotate $ Literal `fmap` pLiteral)
+   <|> pVariable
+
+        
+pLiteral = try stringLit <|> try intLit <|> boolLit
   where
     stringLit = LString `fmap` P.stringLiteral pascal
     intLit = LInteger `fmap` P.integer pascal 
-    boolLit = try (symbol "true" >> return (LBool True)) <|> (symbol "false" >> return (LBool False))
+    boolLit = try (reserved "true" >> return (LBool True)) <|> (reserved "false" >> return (LBool False))
 
 pVariable = annotate $  Variable `fmap` identifier
 
-pBinaryOp :: Parser (Ann Expression)
+pBinaryOp :: Parser (Expression :~ SrcPos)
 pBinaryOp = annotate $ do
     x <- pExpression
     op <- operation
     y <- pExpression
     return $ Op op x y
   where
-    operation = try (symbol "+" >> return Add)
-            <|> try (symbol "-" >> return Sub)
-            <|> try (symbol "*" >> return Mul)
-            <|> try (symbol "/" >> return Div)
-            <|> try (symbol "%" >> return Mod)
-            <|> try (symbol "^" >> return Pow)
+    operation = try (reservedOp "+" >> return Add)
+            <|> try (reservedOp "-" >> return Sub)
+            <|> try (reservedOp "*" >> return Mul)
+            <|> try (reservedOp "/" >> return Div)
+            <|> try (reservedOp "%" >> return Mod)
+            <|> (reservedOp "^" >> return Pow)
 
-pCall :: Parser (Ann Expression)
+pCall :: Parser (Expression :~ SrcPos)
 pCall = annotate $ do
   name <- identifier
   args <- parens $ pExpression `sepBy` comma
   return $ Call name args
 
+parseSource :: FilePath -> IO (Program :~ SrcPos)
+parseSource path = do
+  src <- readFile path
+  case parse pProgram path src of
+    Left err -> fail $ show err
+    Right x -> return x

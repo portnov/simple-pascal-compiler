@@ -3,6 +3,7 @@ program Hello;
 var
   i: integer;
   j: integer;
+  x: string;
 
 begin
   j := 2;
