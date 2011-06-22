@@ -37,7 +37,10 @@ instance (Show a) => Show (SrcPos a) where
 
 showSrcPos (SrcPos {..}) = printf "[l.%d, c.%d] %s" srcLine srcColumn (show content)
 
-data Program a = Program [a NameType] [Function :~ a] [Statement :~ a]
+data Program a = Program {
+  progVariables :: [a NameType],
+  progFunctions :: [Function :~ a],
+  progBody :: [Statement :~ a]}
 
 deriving instance (Show (a NameType), Show (Function :~ a), Show (Statement :~ a)) => Show (Program a)
 deriving instance (Eq (a NameType), Eq (Function :~ a), Eq (Statement :~ a)) => Eq (Program a)
