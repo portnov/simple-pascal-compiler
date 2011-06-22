@@ -1,16 +1,30 @@
-
+{-# LANGUAGE RecordWildCards #-}
 module Language.Pascal.Types where
+
+import Text.Printf
+import Data.List (intercalate)
 
 type Id = String
 
-data Program = Program [NameType] [Function] [Statement]
+data Ann a = Ann {
+  content :: a,
+  srcLine :: Int,
+  srcColumn :: Int }
+  deriving (Eq)
+
+instance (Show a) => Show (Ann a) where
+  show x = show (content x)
+
+showAnn (Ann {..}) = printf "[l.%d, c.%d] %s" srcLine srcColumn (show content)
+
+data Program = Program [Ann NameType] [Ann Function] [Ann Statement]
   deriving (Eq, Show)
 
 data Function = Function {
   fnName :: String,
-  fnFormalArgs :: [NameType],
-  fnVars :: [NameType],
-  fnBody :: [Statement] }
+  fnFormalArgs :: [Ann NameType],
+  fnVars :: [Ann NameType],
+  fnBody :: [Ann Statement] }
   deriving (Eq, Show)
 
 data NameType = String ::: Type
@@ -23,12 +37,19 @@ data Type =
   deriving (Eq, Show)
 
 data Statement =
-    Assign Id Expression
-  | Procedure Id [Expression]
-  | Return Expression
-  | IfThenElse Expression [Statement] [Statement]
-  | For Id Expression Expression [Statement]
-  deriving (Eq, Show)
+    Assign Id (Ann Expression)
+  | Procedure Id [Ann Expression]
+  | Return (Ann Expression)
+  | IfThenElse (Ann Expression) [Ann Statement] [Ann Statement]
+  | For Id (Ann Expression) (Ann Expression) [Ann Statement]
+  deriving (Eq)
+
+instance Show Statement where
+  show (Assign name expr) = name ++ " := " ++ show expr ++ ";"
+  show (Procedure name args) = name ++ "(" ++ intercalate ", " (map show args) ++ ");"
+  show (Return e) = "return " ++ show e ++ ";"
+  show (IfThenElse c a b) = "if " ++ show c ++ " then " ++ show c ++ "else" ++ show b ++ ";"
+  show (For name start end body) = "for " ++ name ++ " := " ++ show start ++ " to " ++ show end ++ show body
 
 data Lit =
     LInteger Integer
@@ -39,8 +60,8 @@ data Lit =
 data Expression =
     Variable Id
   | Literal Lit
-  | Call Id [Expression]
-  | Op BinOp Expression Expression
+  | Call Id [Ann Expression]
+  | Op BinOp (Ann Expression) (Ann Expression)
   deriving (Eq, Show)
 
 data BinOp =

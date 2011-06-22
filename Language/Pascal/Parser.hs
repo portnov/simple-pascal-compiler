@@ -23,6 +23,15 @@ colon = P.colon pascal
 comma = P.comma pascal
 parens = P.parens pascal
 
+annotate p = do
+  pos <- getPosition
+  x <- p
+  return $ Ann {
+    content = x,
+    srcLine = sourceLine pos,
+    srcColumn = sourceColumn pos }
+
+pProgram :: Parser Program
 pProgram = do
   symbol "program"
   identifier
@@ -41,19 +50,20 @@ readType str =
     "boolean" -> TBool
     s         -> error $ "Unknown type: " ++ s
 
-pVars :: Parser [NameType]
+pVars :: Parser [Ann NameType]
 pVars = do
   symbol "var"
   pNameType `sepEndBy1` semi 
 
-pNameType = do
+pNameType :: Parser (Ann NameType)
+pNameType = annotate $ do
   name <- identifier
   colon
   tp <- identifier
   return $ name ::: readType tp
 
-pFunction :: Parser Function
-pFunction = do
+pFunction :: Parser (Ann Function)
+pFunction = annotate $ do
   symbol "function"
   name <- identifier
   args <- parens $ pNameType `sepBy` comma
@@ -64,7 +74,7 @@ pFunction = do
   symbol "end;"
   return $ Function name args vars body
 
-pStatement :: Parser Statement
+pStatement :: Parser (Ann Statement)
 pStatement =
       try pAssign
   <|> try pProcedureCall
@@ -72,23 +82,26 @@ pStatement =
   <|> try pIfThenElse
   <|> pFor
 
-pAssign = do
+pAssign :: Parser (Ann Statement)
+pAssign = annotate $ do
   var <- identifier
   symbol ":="
   expr <- pExpression
   return $ Assign var expr
 
-pProcedureCall = do
+pProcedureCall = annotate $ do
   name <- identifier
   args <- parens $ pExpression `sepBy` comma
   return $ Procedure name args
 
-pReturn = do
+pReturn :: Parser (Ann Statement)
+pReturn = annotate $ do
   symbol "return"
   x <- pExpression
   return $ Return x
 
-pIfThenElse = do
+pIfThenElse :: Parser (Ann Statement)
+pIfThenElse = annotate $ do
   symbol "if"
   cond <- pExpression
   symbol "then"
@@ -106,7 +119,7 @@ pBlock = try (one `fmap` pStatement) <|> do
   where
     one x = [x]
 
-pFor = do
+pFor = annotate $ do
   symbol "for"
   var <- identifier
   symbol ":="
@@ -116,8 +129,9 @@ pFor = do
   sts <- pBlock
   return $ For var start end sts
 
-pExpression =
-      try (Literal `fmap` pLiteral)
+pExpression :: Parser (Ann Expression)
+pExpression = 
+      try (annotate $ Literal `fmap` pLiteral)
   <|> try pVariable
   <|> try (parens pExpression)
   <|> try pBinaryOp
@@ -129,9 +143,10 @@ pLiteral = try stringLit <|> try intLit <|> try boolLit
     intLit = LInteger `fmap` P.integer pascal 
     boolLit = try (symbol "true" >> return (LBool True)) <|> (symbol "false" >> return (LBool False))
 
-pVariable = Variable `fmap` identifier
+pVariable = annotate $  Variable `fmap` identifier
 
-pBinaryOp = do
+pBinaryOp :: Parser (Ann Expression)
+pBinaryOp = annotate $ do
     x <- pExpression
     op <- operation
     y <- pExpression
@@ -144,7 +159,8 @@ pBinaryOp = do
             <|> try (symbol "%" >> return Mod)
             <|> try (symbol "^" >> return Pow)
 
-pCall = do
+pCall :: Parser (Ann Expression)
+pCall = annotate $ do
   name <- identifier
   args <- parens $ pExpression `sepBy` comma
   return $ Call name args
