@@ -133,6 +133,10 @@ data BinOp =
   | Div
   | Mod
   | Pow
+  | IsGT
+  | IsLT
+  | IsEQ
+  | IsNE
   deriving (Eq)
 
 instance Show BinOp where
@@ -142,6 +146,10 @@ instance Show BinOp where
   show Div = "/"
   show Mod = "%"
   show Pow = "^"
+  show IsGT = ">"
+  show IsLT = "<"
+  show IsEQ = "="
+  show IsNE = "!="
 
 type Context = [Id]
 
@@ -157,7 +165,7 @@ emptyGState = CGState {
   variables = [],
   currentContext = [],
   quoteMode = False,
-  generated = Code M.empty [] }
+  generated = Code [M.empty] [] }
 
 type Generate a = State CodeGenState a
 

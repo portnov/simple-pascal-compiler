@@ -15,7 +15,7 @@ pascal = P.makeTokenParser $ javaStyle {
            P.commentStart = "(*",
            P.commentEnd = "*)",
            P.reservedNames = ["program", "function", "begin", "end", "var", "true", "false",
-                             ":=", "return", "if", "then", "else", "for", "to", "do"] }
+                             ":=", "return", "if", "then", "else", "for", "to", "do", "return"] }
 
 symbol = P.symbol pascal
 reserved = P.reserved pascal
@@ -85,10 +85,10 @@ pFunction = annotate $ do
 
 pStatement :: Parser (Statement :~ SrcPos)
 pStatement =
-      try pAssign
+      try pIfThenElse
+  <|> try pAssign
   <|> try pProcedureCall
   <|> try pReturn
-  <|> try pIfThenElse
   <|> pFor
 
 pAssign :: Parser (Statement :~ SrcPos)
@@ -144,9 +144,10 @@ pExpression :: Parser (Expression :~ SrcPos)
 pExpression = buildExpressionParser table term <?> "expression"
   where
     table = [
-            [binary "^" (Pow) AssocLeft],
-            [binary "*" (Mul) AssocLeft, binary "/" (Div) AssocLeft, binary "%" (Mod) AssocLeft ]
-          , [binary "+" (Add) AssocLeft, binary "-" (Sub)   AssocLeft ]
+            [binary "^" Pow AssocLeft],
+            [binary "*" Mul AssocLeft, binary "/" Div AssocLeft, binary "%" Mod AssocLeft ],
+            [binary "+" Add AssocLeft, binary "-" Sub AssocLeft ],
+            [binary "=" IsEQ AssocLeft, binary "!=" IsNE AssocLeft, binary ">" IsGT AssocLeft, binary "<" IsLT AssocLeft ]
           ]
     binary  name fun assoc = Infix (op name fun) assoc
     op name fun = do
@@ -159,7 +160,8 @@ pExpression = buildExpressionParser table term <?> "expression"
 
 
 term = parens pExpression
-   <|> (annotate $ Literal `fmap` pLiteral)
+   <|> try (annotate $ Literal `fmap` pLiteral)
+   <|> try pCall
    <|> pVariable
 
         

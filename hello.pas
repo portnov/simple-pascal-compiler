@@ -6,10 +6,18 @@ var
   z: integer;
   x: string;
 
+function odd(x: integer): boolean;
+begin
+  return (x%2 = 1);
+end;
+
 function hello(a: integer): void;
 begin
-  writeln("Hello world!");
+  writeln("Hello!");
   printInt(a);
+  if odd(a)
+    then writeln("Odd!")
+    else writeln("Even!");
 end;
 
 begin

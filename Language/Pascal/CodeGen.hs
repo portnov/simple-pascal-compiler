@@ -53,8 +53,9 @@ label seed = do
   let n = length $ cCode (generated st)
       name = intercalate "_" (currentContext st) ++ "_" ++ seed ++ "_at_" ++ show n
       gen = generated st
-      marks = M.insert name n (cMarks gen)
-  put $ st {generated = gen {cMarks = marks}}
+      (curMarks:oldMarks) = cMarks gen
+      marks = M.insert name n curMarks
+  put $ st {generated = gen {cMarks = marks:oldMarks}}
   return name
 
 labelFrom :: String -> Generate String
@@ -69,8 +70,9 @@ putLabelHere name = do
   st <- get
   let gen = generated st
       n = length $ cCode (generated st)
-      marks = M.insert name n (cMarks gen)
-  put $ st {generated = gen {cMarks = marks}}
+      (curMarks:oldMarks) = cMarks gen
+      marks = M.insert name n curMarks
+  put $ st {generated = gen {cMarks = marks:oldMarks}}
 
 class CodeGen a where
   generate :: a -> Generate ()
@@ -89,8 +91,9 @@ instance CodeGen (Expression :~ TypeAnn) where
     forM args generate
     i (CALL name)
   generate (tContent -> Op op x y) = do
-    generate y
-    generate x
+    case op of
+      Mod -> generate x >> generate y
+      _   -> generate y >> generate x
     case op of
       Add -> i ADD
       Sub -> i SUB
@@ -98,6 +101,10 @@ instance CodeGen (Expression :~ TypeAnn) where
       Div -> i DIV
       Mod -> i REM
       Pow -> fail "pow() is not supported yet"
+      IsGT -> i CMP
+      IsLT -> i CMP >> i NEG
+      IsEQ -> i CMP >> i ABS >> push (1 :: Integer) >> i SUB
+      IsNE -> i CMP >> i ABS
 
 instance CodeGen (Statement :~ TypeAnn) where
   generate (tContent -> Assign name expr) = do
@@ -191,9 +198,10 @@ instance CodeGen (Function :~ TypeAnn) where
       i (CALL var)
       i ASSIGN
     forM fnBody generate
+    putLabelHere =<< getEndLabel
+    i NOP
     setQuoteMode False
     i DEFINE
-    putLabelHere =<< getEndLabel
     dropContext
       
       
