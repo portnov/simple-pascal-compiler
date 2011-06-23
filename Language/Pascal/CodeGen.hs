@@ -89,7 +89,9 @@ instance CodeGen (Expression :~ TypeAnn) where
       LBool b    -> push (fromIntegral (fromEnum b) :: Integer)
   generate (tContent -> Call name args) = do
     forM args generate
-    i (CALL name)
+    case lookupBuiltin name of
+      Just code -> code
+      Nothing   -> i (CALL name)
   generate (tContent -> Op op x y) = do
     case op of
       Mod -> generate x >> generate y

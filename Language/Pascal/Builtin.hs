@@ -28,8 +28,9 @@ builtinFunctions :: [(Id, Type, Generate ())]
 builtinFunctions =
  [("write",   TFunction [TString] TVoid, write),
   ("writeln", TFunction [TString] TVoid, writeln),
-  ("printInt", TFunction [TInteger] TVoid, printInt),
-  ("readln",  TFunction [] TInteger,     readln) ]
+  ("printInt", TFunction [TInteger] TVoid, write),
+  ("readln",  TFunction [] TString,      readln),
+  ("readInt", TFunction [] TInteger,     readln) ]
 
 lookupBuiltin :: Id -> Maybe (Generate ())
 lookupBuiltin name = look builtinFunctions
@@ -46,9 +47,6 @@ writeln = do
   i PRINT
   push "\n"
   i PRINT
-
-printInt :: Generate ()
-printInt = writeln
 
 readln :: Generate ()
 readln = i INPUT

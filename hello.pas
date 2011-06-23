@@ -4,7 +4,7 @@ var
   i: integer;
   j: integer;
   z: integer;
-  x: string;
+  n: integer;
 
 function odd(x: integer): boolean;
 begin
@@ -16,14 +16,16 @@ begin
   writeln("Hello!");
   printInt(a);
   if odd(a)
-    then writeln("Odd!")
-    else writeln("Even!");
+    then writeln(" is odd.")
+    else writeln(" is even.");
 end;
 
 begin
   z := 1;
   j := 3 + z*2;
-  for i := j*2 to 15 do
+  write("Enter number: ");
+  n := readInt();
+  for i := j*2 to n do
     begin
     hello(i);
     end;
