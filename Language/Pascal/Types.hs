@@ -1,9 +1,12 @@
 {-# LANGUAGE RecordWildCards, TypeOperators, StandaloneDeriving, FlexibleContexts, UndecidableInstances #-}
 module Language.Pascal.Types where
 
+import Control.Monad.State
 import qualified Data.Map as M
 import Data.List (intercalate)
 import Text.Printf
+
+import Language.SSVM.Types
 
 type Id = String
 
@@ -139,4 +142,22 @@ instance Show BinOp where
   show Div = "/"
   show Mod = "%"
   show Pow = "^"
+
+type Context = [Id]
+
+data CodeGenState = CGState {
+  variables :: [Id],
+  currentContext :: Context,
+  quoteMode :: Bool,
+  generated :: Code }
+  deriving (Eq, Show)
+
+emptyGState :: CodeGenState
+emptyGState = CGState {
+  variables = [],
+  currentContext = [],
+  quoteMode = False,
+  generated = Code M.empty [] }
+
+type Generate a = State CodeGenState a
 

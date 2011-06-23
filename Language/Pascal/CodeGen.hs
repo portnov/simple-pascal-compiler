@@ -7,51 +7,26 @@ import Data.List (intercalate)
 import qualified Data.Map as M
 
 import Language.SSVM.Types
-import Language.SSVM.Binary
 
 import Language.Pascal.Types
-import Language.Pascal.TypeCheck
-
-type Context = [Id]
-
-data CodeGenState = CGState {
-  variables :: [Id],
-  currentContext :: Context,
-  generated :: Code }
-  deriving (Eq, Show)
-
-emptyGState :: CodeGenState
-emptyGState = CGState {
-  variables = [],
-  currentContext = [],
-  generated = Code M.empty [] }
-
-type Generate a = State CodeGenState a
-
-putItem :: StackItem -> Generate ()
-putItem x = do
-  st <- get
-  let gen = generated st
-      code = x: cCode (generated st)
-  put $ st {generated = gen {cCode = code}}
-
-i :: Instruction -> Generate ()
-i x = putItem (SInstruction x)
-
-push :: StackType a => a -> Generate ()
-push x = i (PUSH $ toStack x)
+import Language.Pascal.Builtin
 
 enterContext :: Id -> Generate ()
 enterContext name = do
   st <- get
   put $ st {currentContext = name: currentContext st}
 
-exitContext :: Generate ()
-exitContext = do
+dropContext :: Generate ()
+dropContext = do
   st <- get
   case currentContext st of
-    [] -> fail "Internal error: empty context on exitContext!"
+    [] -> fail "Internal error: empty context on dropContext!"
     (x:xs) -> put $ st {currentContext = xs}
+
+setQuoteMode :: Bool -> Generate ()
+setQuoteMode b = do
+  st <- get
+  put $ st {quoteMode = b}
 
 getEndLabel :: Generate String
 getEndLabel = do
@@ -132,9 +107,9 @@ instance CodeGen (Statement :~ TypeAnn) where
     i ASSIGN
   generate (tContent -> Procedure name args) = do
     forM args generate
-    case name of
-      "writeln" -> i PRINT >> push "\n" >> i PRINT
-      _         -> i (CALL name)
+    case lookupBuiltin name of
+      Just code -> code
+      Nothing   -> i (CALL name)
   generate (tContent -> Return expr) = do
     generate expr
     end <- getEndLabel
@@ -178,13 +153,49 @@ instance CodeGen (Statement :~ TypeAnn) where
 
 instance CodeGen (Program :~ TypeAnn) where
   generate (tContent -> Program {..}) = do
-    forM progVariables $ \v -> do
-      i COLON
-      let (name ::: tp) = tContent v
+      forM progVariables $ \v -> do
+        let (name ::: _) = tContent v
+        declare name
+      forM progFunctions $ \fn -> do
+        forM (fnFormalArgs $ tContent fn) $ \a -> do
+          let (name ::: _) = tContent a
+          i COLON
+          push $ (fnName $ tContent fn) ++ "_" ++ name
+          i VARIABLE
+        forM (fnVars $ tContent fn) $ \v -> do
+          let (name ::: _) = tContent v
+          i COLON
+          push $ (fnName $ tContent fn) ++ "_" ++ name
+          i VARIABLE
+      forM progFunctions generate
+      vars <- gets variables
+      forM vars declare
+      forM_ progBody generate
+      putLabelHere =<< getEndLabel
+    where
+      declare name = do
+        i COLON
+        var <- getFullName name
+        push var
+        i VARIABLE
+
+instance CodeGen (Function :~ TypeAnn) where
+  generate (tContent -> Function {..}) = do
+    i COLON
+    push fnName
+    setQuoteMode True
+    enterContext fnName
+    forM (reverse fnFormalArgs) $ \a -> do
+      let (name ::: _) = tContent a
       var <- getFullName name
-      push var
-      i VARIABLE
-    -- FIXME: generate functions
-    forM_ progBody generate
+      i (CALL var)
+      i ASSIGN
+    forM fnBody generate
+    setQuoteMode False
+    i DEFINE
+    putLabelHere =<< getEndLabel
+    dropContext
+      
+      
 
     

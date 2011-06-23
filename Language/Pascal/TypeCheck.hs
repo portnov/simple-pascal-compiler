@@ -10,6 +10,7 @@ import Text.Printf
 import Text.Parsec hiding (State)
 
 import Language.Pascal.Types
+import Language.Pascal.Builtin
 import Language.Pascal.Parser
 
 lookupSymbol :: Id -> SymbolTable -> Maybe Symbol
@@ -38,12 +39,9 @@ data CheckState = CheckState {
   ckColumn :: Int }
   deriving (Eq, Show)
 
-builtinSymbols = M.fromList $ map pair $ [
-    "write" :::  TFunction [TString] TVoid,
-    "writeln" ::: TFunction [TString] TVoid,
-    "readln" ::: TFunction [] TInteger ]
+builtinSymbols = M.fromList $ map pair builtinFunctions
   where
-    pair (name ::: tp) = (name, Symbol {
+    pair (name, tp, _) = (name, Symbol {
                                  symbolName = name,
                                  symbolType = tp,
                                  symbolDefLine = 0,
@@ -225,13 +223,13 @@ instance Typed Function where
       body <- mapM typeCheck fnBody
       let fn = Function fnName args fnResultType vars body
           tp = TFunction (map typeOf args) fnResultType
-          pos = SrcPos {
-                  content = fnName ::: tp,
-                  srcLine = srcLine x,
-                  srcColumn = srcColumn x }
+--           pos = SrcPos {
+--                   content = fnName ::: tp,
+--                   srcLine = srcLine x,
+--                   srcColumn = srcColumn x }
       result <- returnT fnResultType x fn
       dropSymbolTable
-      addSymbol pos
+--       addSymbol pos
       return $ result {localSymbols = makeSymbolTable vars}
     where
       varType v = do
