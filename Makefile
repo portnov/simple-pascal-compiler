@@ -1,8 +1,8 @@
 GHC=ghc -fwarn-unused-imports --make
 
-all: test
+all: spc
 
-test: test.hs Language/Pascal/*.hs
+spc: spc.hs Language/Pascal/*.hs
 	$(GHC) $<
 
 clean:
