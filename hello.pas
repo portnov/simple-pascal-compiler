@@ -1,8 +1,7 @@
 program Hello;
 
 var
-  i: integer;
-  j: integer;
+  i, j: integer;
   z: integer;
   n: integer;
 

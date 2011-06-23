@@ -59,7 +59,22 @@ readType str =
 pVars :: Parser [SrcPos NameType]
 pVars = do
   reserved "var"
-  pNameType `sepEndBy1` semi 
+  lists <- pVarsList `sepEndBy1` semi 
+  return $ concat lists
+
+pVarsList :: Parser [SrcPos NameType]
+pVarsList = do
+    pos <- getPosition
+    names <- identifier `sepBy` comma
+    colon
+    tp <- identifier
+    return $ map (ret tp pos) names
+  where
+    ret tp pos name =
+      SrcPos {
+        content = name ::: readType tp,
+        srcLine = sourceLine pos,
+        srcColumn = sourceColumn pos }
 
 pNameType :: Parser (SrcPos NameType)
 pNameType = annotate $ do
@@ -158,13 +173,11 @@ pExpression = buildExpressionParser table term <?> "expression"
         srcLine = sourceLine pos,
         srcColumn = sourceColumn pos }
 
-
 term = parens pExpression
    <|> try (annotate $ Literal `fmap` pLiteral)
    <|> try pCall
    <|> pVariable
 
-        
 pLiteral = try stringLit <|> try intLit <|> boolLit
   where
     stringLit = LString `fmap` P.stringLiteral pascal
@@ -172,20 +185,6 @@ pLiteral = try stringLit <|> try intLit <|> boolLit
     boolLit = try (reserved "true" >> return (LBool True)) <|> (reserved "false" >> return (LBool False))
 
 pVariable = annotate $  Variable `fmap` identifier
-
-pBinaryOp :: Parser (Expression :~ SrcPos)
-pBinaryOp = annotate $ do
-    x <- pExpression
-    op <- operation
-    y <- pExpression
-    return $ Op op x y
-  where
-    operation = try (reservedOp "+" >> return Add)
-            <|> try (reservedOp "-" >> return Sub)
-            <|> try (reservedOp "*" >> return Mul)
-            <|> try (reservedOp "/" >> return Div)
-            <|> try (reservedOp "%" >> return Mod)
-            <|> (reservedOp "^" >> return Pow)
 
 pCall :: Parser (Expression :~ SrcPos)
 pCall = annotate $ do
