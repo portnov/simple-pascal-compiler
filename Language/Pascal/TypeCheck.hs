@@ -178,13 +178,13 @@ instance Typed Statement where
     setPos s
     sym <- getSymbol name
     case symbolType sym of
-      TFunction formalArgTypes resType -> do
+      TFunction formalArgTypes TVoid -> do
           args' <- mapM typeCheck args
           let actualTypes = map typeOf args'
           if actualTypes == formalArgTypes
-            then returnT resType s (Procedure name args')
+            then returnT TVoid s (Procedure name args')
             else failT $ "Invalid types in procedure call: " ++ show actualTypes ++ " instead of " ++ show formalArgTypes
-      t -> failT $ "Symbol " ++ name ++ " is not a function, but " ++ show t
+      t -> failT $ "Symbol " ++ name ++ " is not a procedure, but " ++ show t
 
   typeCheck s@(content -> Return x) = do
     setPos s
