@@ -15,7 +15,7 @@ main = do
   case args of
     [path] -> do
       prog <- checkSource path
-      let codeRev = generated $ execState (generate prog) emptyGState
+      let codeRev = generated $ execState (runGenerate $ generate prog) emptyGState
           code = codeRev {cCode = reverse (cCode codeRev)}
       dumpCode (replaceExtension path ".bytecode") code
     _ -> putStrLn "Synopsis: spc source.pas"

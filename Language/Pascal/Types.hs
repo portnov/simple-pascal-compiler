@@ -1,7 +1,8 @@
-{-# LANGUAGE RecordWildCards, TypeOperators, StandaloneDeriving, FlexibleContexts, UndecidableInstances #-}
+{-# LANGUAGE RecordWildCards, TypeOperators, StandaloneDeriving, FlexibleContexts, UndecidableInstances, GeneralizedNewtypeDeriving #-}
 module Language.Pascal.Types where
 
 import Control.Monad.State
+import Control.Monad.Error
 import qualified Data.Map as M
 import Data.List (intercalate)
 import Text.Printf
@@ -161,11 +162,9 @@ instance Show BinOp where
   show IsEQ = "="
   show IsNE = "!="
 
-type Context = [Id]
-
 data CodeGenState = CGState {
   variables :: [Id],
-  currentContext :: Context,
+  currentContext :: [Context],
   quoteMode :: Bool,
   generated :: Code }
   deriving (Eq, Show)
@@ -177,5 +176,55 @@ emptyGState = CGState {
   quoteMode = False,
   generated = Code [M.empty] [] }
 
-type Generate a = State CodeGenState a
+data TError = TError {
+  errLine :: Int,
+  errColumn :: Int,
+  errContext :: Context,
+  errMessage :: String }
+  deriving (Eq)
+
+instance Show TError where
+  show (TError {..}) =
+    printf "[l.%d, c.%d] (in %s): %s" errLine errColumn (show errContext) errMessage
+
+instance Error TError where
+  noMsg = TError 0 0 Unknown "Unknown error"
+  strMsg s = TError 0 0 Unknown s
+
+data Context =
+    Unknown
+  | Outside
+  | ProgramBody
+  | InFunction Id Type
+  deriving (Eq)
+
+instance Show Context where
+  show Unknown              = "unknown context"
+  show Outside              = "outside program body"
+  show ProgramBody          = "program body"
+  show (InFunction name TVoid) = "procedure " ++ name
+  show (InFunction name tp) = printf "function %s(): %s" name (show tp)
+
+contextId :: Context -> String
+contextId Unknown             = "unknown"
+contextId Outside             = "global"
+contextId ProgramBody         = "main"
+contextId (InFunction name _) = name
+
+data CheckState = CheckState {
+  symbolTable :: SymbolTable,
+  contexts :: [Context],
+  ckLine :: Int,
+  ckColumn :: Int }
+  deriving (Eq, Show)
+
+newtype Generate a = Generate {runGenerate :: State CodeGenState a}
+  deriving (Monad, MonadState CodeGenState)
+
+newtype Check a = Check {runCheck :: ErrorT TError (State CheckState) a}
+  deriving (Monad, MonadError TError, MonadState CheckState)
+
+class (Monad m) => Checker m where
+  enterContext :: Context -> m ()
+  dropContext :: m ()
 

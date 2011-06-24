@@ -6,7 +6,6 @@ import Control.Monad.State
 import Control.Monad.Error
 import qualified Data.Map as M
 import Data.Maybe
-import Text.Printf
 import Text.Parsec hiding (State)
 
 import Language.Pascal.Types
@@ -18,42 +17,6 @@ lookupSymbol name table =
   case filter isJust $ map (M.lookup name) table of
     [] -> Nothing
     (s:_) -> s
-
-data TError = TError {
-  errLine :: Int,
-  errColumn :: Int,
-  errContext :: TypeContext,
-  errMessage :: String }
-  deriving (Eq)
-
-instance Show TError where
-  show (TError {..}) =
-    printf "[l.%d, c.%d] (in %s): %s" errLine errColumn (show errContext) errMessage
-
-instance Error TError where
-  noMsg = TError 0 0 Unknown "Unknown error"
-  strMsg s = TError 0 0 Unknown s
-
-data TypeContext =
-    Unknown
-  | Outside
-  | ProgramBody
-  | InFunction Id Type
-  deriving (Eq)
-
-instance Show TypeContext where
-  show Unknown              = "unknown context"
-  show Outside              = "outside program body"
-  show ProgramBody          = "program body"
-  show (InFunction name TVoid) = "procedure " ++ name
-  show (InFunction name tp) = printf "function %s(): %s" name (show tp)
-
-data CheckState = CheckState {
-  symbolTable :: SymbolTable,
-  contexts :: [TypeContext],
-  ckLine :: Int,
-  ckColumn :: Int }
-  deriving (Eq, Show)
 
 builtinSymbols = M.fromList $ map pair builtinFunctions
   where
@@ -69,8 +32,6 @@ emptyState = CheckState {
   contexts = [],
   ckLine = 0,
   ckColumn = 0 }
-
-type Check a = ErrorT TError (State CheckState) a
 
 class Typed a where
   typeCheck :: a :~ SrcPos -> Check (a :~ TypeAnn)
@@ -98,17 +59,16 @@ failT msg = do
                                else head cxs,
                 errMessage = msg }
 
-enterContext :: TypeContext -> Check ()
-enterContext c = do
-  st <- get
-  put $ st {contexts = c: contexts st}
+instance Checker Check where
+  enterContext c = do
+    st <- get
+    put $ st {contexts = c: contexts st}
 
-dropContext :: Check ()
-dropContext = do
-  st <- get
-  case contexts st of
-    []  -> failT "Internal error in TypeCheck: dropContext on empty context!"
-    (_:old) -> put $ st {contexts = old}
+  dropContext = do
+    st <- get
+    case contexts st of
+      []  -> failT "Internal error in TypeCheck: dropContext on empty context!"
+      (_:old) -> put $ st {contexts = old}
 
 setPos :: SrcPos a -> Check ()
 setPos x = do
@@ -317,7 +277,7 @@ checkTypes prog = evalState check emptyState
   where
     check :: State CheckState (Program :~ TypeAnn)
     check = do
-      x <- runErrorT (typeCheck prog)
+      x <- runErrorT (runCheck $ typeCheck prog)
       case x of
         Right result -> return result
         Left  err -> fail $ "type checker: " ++ show err

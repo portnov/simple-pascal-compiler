@@ -11,17 +11,21 @@ import Language.SSVM.Types
 import Language.Pascal.Types
 import Language.Pascal.Builtin
 
-enterContext :: Id -> Generate ()
-enterContext name = do
-  st <- get
-  put $ st {currentContext = name: currentContext st}
+instance Checker Generate where
+  enterContext c = do
+    st <- get
+    put $ st {currentContext = c: currentContext st}
 
-dropContext :: Generate ()
-dropContext = do
-  st <- get
-  case currentContext st of
-    [] -> fail "Internal error: empty context on dropContext!"
-    (x:xs) -> put $ st {currentContext = xs}
+  dropContext = do
+    st <- get
+    case currentContext st of
+      [] -> fail "Internal error: empty context on dropContext!"
+      (_:xs) -> put $ st {currentContext = xs}
+
+getContextString :: Generate String
+getContextString = do
+  cxs <- gets (map contextId . currentContext)
+  return $ intercalate "_" cxs
 
 setQuoteMode :: Bool -> Generate ()
 setQuoteMode b = do
@@ -30,28 +34,28 @@ setQuoteMode b = do
 
 getEndLabel :: Generate String
 getEndLabel = do
-  context <- gets currentContext
-  let name = intercalate "_" context ++ "__END"
-  return name
+  cstr <- getContextString
+  return $ cstr ++ "__END"
 
 variable :: String -> Generate String
 variable seed = do
   st <- get
-  let name = intercalate "_" (currentContext st) ++ "_" ++ seed
+  cstr <- getContextString
+  let name = cstr ++ "_" ++ seed
   put $ st {variables = name: variables st}
   return name
 
 getFullName :: String -> Generate String
 getFullName seed = do
-  st <- get
-  let name = intercalate "_" (currentContext st) ++ "_" ++ seed
-  return name
+  cstr <- getContextString
+  return $ cstr ++ "_" ++ seed
 
 label :: String -> Generate String
 label seed = do
   st <- get
+  cstr <- getContextString
   let n = length $ cCode (generated st)
-      name = intercalate "_" (currentContext st) ++ "_" ++ seed ++ "_at_" ++ show n
+      name = cstr ++ "_" ++ seed ++ "_at_" ++ show n
       gen = generated st
       (curMarks:oldMarks) = cMarks gen
       marks = M.insert name n curMarks
@@ -61,8 +65,9 @@ label seed = do
 labelFrom :: String -> Generate String
 labelFrom seed = do
   st <- get
+  cstr <- getContextString
   let n = length $ cCode (generated st)
-      name = intercalate "_" (currentContext st) ++ "_" ++ seed ++ "_from_" ++ show n
+      name = cstr ++ "_" ++ seed ++ "_from_" ++ show n
   return name
 
 putLabelHere :: String -> Generate ()
@@ -193,7 +198,7 @@ instance CodeGen (Function :~ TypeAnn) where
     i COLON
     push fnName
     setQuoteMode True
-    enterContext fnName
+    enterContext (InFunction fnName fnResultType)
     forM (reverse fnFormalArgs) $ \a -> do
       let (name ::: _) = tContent a
       var <- getFullName name
