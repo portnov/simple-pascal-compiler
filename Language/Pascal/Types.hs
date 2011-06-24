@@ -100,6 +100,7 @@ data Statement a =
     Assign Id (Expression :~ a)
   | Procedure Id [Expression :~ a]
   | Return (Expression :~ a)
+  | Exit
   | IfThenElse (Expression :~ a) [Statement :~ a] [Statement :~ a]
   | For Id (Expression :~ a) (Expression :~ a) [Statement :~ a]
 
@@ -108,8 +109,9 @@ deriving instance (Eq (Expression :~ a), Eq (Statement :~ a)) => Eq (Statement a
 instance (Show (Expression :~ a), Show (Statement :~ a)) => Show (Statement a) where
   show (Assign name expr) = name ++ " := " ++ show expr ++ ";"
   show (Procedure name args) = name ++ "(" ++ intercalate ", " (map show args) ++ ");"
+  show Exit = "exit;"
   show (Return e) = "return " ++ show e ++ ";"
-  show (IfThenElse c a b) = "if " ++ show c ++ " then " ++ show c ++ "else" ++ show b ++ ";"
+  show (IfThenElse c a b) = "if " ++ show c ++ " then " ++ show a ++ "else" ++ show b ++ ";"
   show (For name start end body) = "for " ++ name ++ " := " ++ show start ++ " to " ++ show end ++ show body
 
 data Lit =

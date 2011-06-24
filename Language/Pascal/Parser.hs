@@ -15,7 +15,8 @@ pascal = P.makeTokenParser $ javaStyle {
            P.commentStart = "(*",
            P.commentEnd = "*)",
            P.reservedNames = ["program", "function", "begin", "end", "var", "true", "false",
-                             ":=", "return", "if", "then", "else", "for", "to", "do", "return"] }
+                             ":=", "return", "if", "then", "else", "for", "to", "do",
+                             "exit", "procedure"] }
 
 symbol = P.symbol pascal
 reserved = P.reserved pascal
@@ -41,7 +42,7 @@ pProgram = annotate $ do
   identifier
   semi
   vars <- option [] pVars
-  fns <- many pFunction
+  fns <- many (try pFunction <|> pProcedure)
   reserved "begin"
   sts <- pStatement `sepEndBy1` semi 
   reserved "end"
@@ -98,11 +99,25 @@ pFunction = annotate $ do
   semi
   return $ Function name args (readType res) vars body
 
+pProcedure :: Parser (Function :~ SrcPos)
+pProcedure = annotate $ do
+  reserved "procedure"
+  name <- identifier
+  args <- parens $ pNameType `sepBy` comma
+  semi
+  vars <- option [] pVars
+  reserved "begin"
+  body <- pStatement `sepEndBy1` semi
+  reserved "end"
+  semi
+  return $ Function name args TVoid vars body
+
 pStatement :: Parser (Statement :~ SrcPos)
 pStatement =
       try pIfThenElse
   <|> try pAssign
   <|> try pProcedureCall
+  <|> try (annotate (reserved "exit" >> return Exit))
   <|> try pReturn
   <|> pFor
 
@@ -130,7 +145,7 @@ pIfThenElse = annotate $ do
   cond <- pExpression
   reserved "then"
   ok <- pBlock
-  el <- option [] $ do
+  el <- option [] $ try $ do
           reserved "else"
           pBlock
   return $ IfThenElse cond ok el
@@ -139,7 +154,7 @@ pBlock = try (one `fmap` pStatement) <|> do
            reserved "begin"
            sts <- pStatement `sepEndBy1` semi
            reserved "end"
-           semi
+--            semi
            return sts
   where
     one x = [x]

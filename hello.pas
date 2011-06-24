@@ -10,10 +10,12 @@ begin
   return (x%2 = 1);
 end;
 
-function hello(a: integer): void;
+procedure hello(a: integer);
 begin
   writeln("Hello!");
   printInt(a);
+  if a = 11
+    then exit;
   if odd(a)
     then writeln(" is odd.")
     else writeln(" is even.");

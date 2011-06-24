@@ -184,6 +184,14 @@ instance Typed Statement where
             else failCheck $ "Invalid types in procedure call: " ++ show actualTypes ++ " instead of " ++ show formalArgTypes
       t -> failCheck $ "Symbol " ++ name ++ " is not a procedure, but " ++ show t
 
+  typeCheck s@(content -> Exit) = do
+    setPos s
+    cxs <- gets contexts
+    case cxs of
+      (InFunction _ TVoid:_) -> returnT TVoid s Exit
+      (ProgramBody:_)        -> returnT TVoid s Exit
+      _                      -> failCheck "exit statement not in procedure or program body"
+
   typeCheck s@(content -> Return x) = do
     setPos s
     x' <- typeCheck x

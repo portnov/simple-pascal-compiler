@@ -150,6 +150,10 @@ instance CodeGen (Statement :~ TypeAnn) where
     end <- getEndLabel
     i (GETMARK end)
     i GOTO
+  generate (tContent -> Exit) = do
+    end <- getEndLabel
+    i (GETMARK end)
+    i GOTO
   generate (tContent -> IfThenElse c a b) = do
     generate c
     elseLabel <- labelFrom "else"
