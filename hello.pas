@@ -29,5 +29,7 @@ begin
   for i := j*2 to n do
     begin
     hello(i);
+    if i = 12
+      then writeln("Dozen.");
     end;
 end.
