@@ -218,8 +218,8 @@ data CheckState = CheckState {
   ckColumn :: Int }
   deriving (Eq, Show)
 
-newtype Generate a = Generate {runGenerate :: State CodeGenState a}
-  deriving (Monad, MonadState CodeGenState)
+newtype Generate a = Generate {runGenerate :: ErrorT TError (State CodeGenState) a}
+  deriving (Monad, MonadState CodeGenState, MonadError TError)
 
 newtype Check a = Check {runCheck :: ErrorT TError (State CheckState) a}
   deriving (Monad, MonadError TError, MonadState CheckState)
@@ -227,4 +227,5 @@ newtype Check a = Check {runCheck :: ErrorT TError (State CheckState) a}
 class (Monad m) => Checker m where
   enterContext :: Context -> m ()
   dropContext :: m ()
+  failCheck :: String -> m a
 

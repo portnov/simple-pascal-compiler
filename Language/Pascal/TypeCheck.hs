@@ -46,18 +46,6 @@ returnT t x res =
              typeOf = t,
              localSymbols = M.empty}
 
-failT :: String -> Check b
-failT msg = do
-  line <- gets ckLine
-  col  <- gets ckColumn
-  cxs <- gets contexts
-  throwError $ TError {
-                errLine    = line,
-                errColumn  = col,
-                errContext = if null cxs
-                               then Unknown
-                               else head cxs,
-                errMessage = msg }
 
 instance Checker Check where
   enterContext c = do
@@ -67,8 +55,21 @@ instance Checker Check where
   dropContext = do
     st <- get
     case contexts st of
-      []  -> failT "Internal error in TypeCheck: dropContext on empty context!"
+      []  -> failCheck "Internal error in TypeCheck: dropContext on empty context!"
       (_:old) -> put $ st {contexts = old}
+
+  failCheck msg = do
+    line <- gets ckLine
+    col  <- gets ckColumn
+    cxs <- gets contexts
+    throwError $ TError {
+                  errLine    = line,
+                  errColumn  = col,
+                  errContext = if null cxs
+                                 then Unknown
+                                 else head cxs,
+                  errMessage = msg }
+
 
 setPos :: SrcPos a -> Check ()
 setPos x = do
@@ -79,7 +80,7 @@ getSymbol :: Id -> Check Symbol
 getSymbol name = do
   table <- gets symbolTable
   case lookupSymbol name table of
-    Nothing -> failT $ "Unknown symbol: " ++ name
+    Nothing -> failCheck $ "Unknown symbol: " ++ name
     Just s  -> return s
 
 addSymbol :: SrcPos NameType -> Check ()
@@ -88,7 +89,7 @@ addSymbol (SrcPos {..}) = do
   (current:other) <- gets symbolTable
   let (name ::: tp) = content
   case M.lookup name current of
-    Just s -> failT $ "Symbol is already defined: " ++ showSymbol s
+    Just s -> failCheck $ "Symbol is already defined: " ++ showSymbol s
     Nothing -> do
       let new = M.insert name (Symbol name tp srcLine srcColumn) current
       put $ st {symbolTable = (new:other)}
@@ -104,7 +105,7 @@ dropSymbolTable = do
   st <- get
   was <- gets symbolTable
   case was of
-    [] -> failT "Internal error: empty symbol table on dropSymbolTable!"
+    [] -> failCheck "Internal error: empty symbol table on dropSymbolTable!"
     (_:older) -> put $ st {symbolTable = older}
 
 withSymbolTable :: Check a -> Check a
@@ -169,7 +170,7 @@ instance Typed Statement where
       then do
            let result = Assign name rhs
            returnT (typeOf rhs) x result
-      else failT $ "Invalid assignment: LHS type is " ++ show (symbolType sym) ++ ", but RHS type is " ++ show (typeOf rhs)
+      else failCheck $ "Invalid assignment: LHS type is " ++ show (symbolType sym) ++ ", but RHS type is " ++ show (typeOf rhs)
 
   typeCheck s@(content -> Procedure name args) = do
     setPos s
@@ -180,8 +181,8 @@ instance Typed Statement where
           let actualTypes = map typeOf args'
           if actualTypes == formalArgTypes
             then returnT TVoid s (Procedure name args')
-            else failT $ "Invalid types in procedure call: " ++ show actualTypes ++ " instead of " ++ show formalArgTypes
-      t -> failT $ "Symbol " ++ name ++ " is not a procedure, but " ++ show t
+            else failCheck $ "Invalid types in procedure call: " ++ show actualTypes ++ " instead of " ++ show formalArgTypes
+      t -> failCheck $ "Symbol " ++ name ++ " is not a procedure, but " ++ show t
 
   typeCheck s@(content -> Return x) = do
     setPos s
@@ -189,17 +190,17 @@ instance Typed Statement where
     let retType = typeOf x'
     cxs <- gets contexts
     case cxs of
-      (InFunction _ TVoid:_) -> failT "return statement in procedure"
+      (InFunction _ TVoid:_) -> failCheck "return statement in procedure"
       (InFunction _ t:_)
           | t == retType -> returnT (typeOf x') s (Return x')
-          | otherwise    -> failT $ "Return value type does not match: expecting " ++ show t ++ ", got " ++ show retType
-      _                  -> failT $ "return statement not in function"
+          | otherwise    -> failCheck $ "Return value type does not match: expecting " ++ show t ++ ", got " ++ show retType
+      _                  -> failCheck $ "return statement not in function"
 
   typeCheck s@(content -> IfThenElse c a b) = do
     setPos s
     c' <- typeCheck c
     when (typeOf c' /= TBool) $
-      failT $ "Condition type is not Boolean: " ++ show c
+      failCheck $ "Condition type is not Boolean: " ++ show c
     a' <- mapM typeCheck a
     b' <- mapM typeCheck b
     returnT TVoid s (IfThenElse c' a' b')
@@ -208,13 +209,13 @@ instance Typed Statement where
     setPos s
     sym <- getSymbol name
     when (symbolType sym /= TInteger) $
-      failT $ "Counter variable is not Integer: " ++ name
+      failCheck $ "Counter variable is not Integer: " ++ name
     start' <- typeCheck start
     when (typeOf start' /= TInteger) $
-      failT $ "Counter start value is not Integer: " ++ show start
+      failCheck $ "Counter start value is not Integer: " ++ show start
     end' <- typeCheck end
     when (typeOf end' /= TInteger) $
-      failT $ "Counter end value is not Integer: " ++ show end
+      failCheck $ "Counter end value is not Integer: " ++ show end
     body' <- mapM typeCheck body
     returnT TVoid s (For name start' end' body')
 
@@ -259,8 +260,8 @@ instance Typed Expression where
           let actualTypes = map typeOf args'
           if actualTypes == formalArgTypes
             then returnT resType e (Call name args')
-            else failT $ "Invalid types in function call: " ++ show actualTypes ++ " instead of " ++ show formalArgTypes
-      t -> failT $ "Symbol " ++ name ++ " is not a function, but " ++ show t
+            else failCheck $ "Invalid types in function call: " ++ show actualTypes ++ " instead of " ++ show formalArgTypes
+      t -> failCheck $ "Symbol " ++ name ++ " is not a function, but " ++ show t
 
   typeCheck e@(content -> Op op x y) = do
     setPos e
@@ -270,7 +271,7 @@ instance Typed Expression where
       (TInteger, TInteger)
         | op `elem` [IsEQ, IsNE, IsGT, IsLT] -> returnT TBool    e (Op op x' y')
         | otherwise                          -> returnT TInteger e (Op op x' y')
-      _ -> failT $ "Invalid operand types!"
+      _ -> failCheck $ "Invalid operand types!"
 
 checkTypes :: Program :~ SrcPos -> Program :~ TypeAnn
 checkTypes prog = evalState check emptyState

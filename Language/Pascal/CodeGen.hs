@@ -3,6 +3,7 @@ module Language.Pascal.CodeGen where
 
 import Control.Monad
 import Control.Monad.State
+import Control.Monad.Error
 import Data.List (intercalate)
 import qualified Data.Map as M
 
@@ -19,8 +20,28 @@ instance Checker Generate where
   dropContext = do
     st <- get
     case currentContext st of
-      [] -> fail "Internal error: empty context on dropContext!"
+      [] -> failCheck "Internal error: empty context on dropContext!"
       (_:xs) -> put $ st {currentContext = xs}
+
+  failCheck msg = do
+    cxs <- gets currentContext
+    throwError $ TError {
+                  errLine    = 0,
+                  errColumn  = 0,
+                  errContext = if null cxs
+                                 then Unknown
+                                 else head cxs,
+                  errMessage = msg }
+
+runCodeGen :: Generate () -> Code
+runCodeGen gen = generated $ execState go emptyGState
+  where
+    go :: State CodeGenState ()
+    go = do
+      x <- runErrorT (runGenerate gen)
+      case x of
+        Right result -> return result
+        Left  err    -> fail $ "code generator: " ++ show err
 
 getContextString :: Generate String
 getContextString = do
@@ -107,7 +128,7 @@ instance CodeGen (Expression :~ TypeAnn) where
       Mul -> i MUL
       Div -> i DIV
       Mod -> i REM
-      Pow -> fail "pow() is not supported yet"
+      Pow -> failCheck "pow() is not supported yet"
       IsGT -> i CMP
       IsLT -> i CMP >> i NEG
       IsEQ -> i CMP >> i ABS >> push (1 :: Integer) >> i SUB
@@ -210,7 +231,4 @@ instance CodeGen (Function :~ TypeAnn) where
     setQuoteMode False
     i DEFINE
     dropContext
-      
-      
 
-    
