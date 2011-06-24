@@ -83,7 +83,17 @@ data Type =
   | TBool
   | TVoid
   | TFunction [Type] Type
-  deriving (Eq, Show)
+  deriving (Eq)
+
+instance Show Type where
+  show TInteger = "integer"
+  show TString  = "string"
+  show TBool    = "boolean"
+  show TVoid    = "void"
+  show (TFunction args TVoid) =
+    "procedure (" ++ intercalate ", " (map show args) ++ ")"
+  show (TFunction args res) =
+    "function (" ++ intercalate ", " (map show args) ++ "): " ++ show res
 
 data Statement a =
     Assign Id (Expression :~ a)

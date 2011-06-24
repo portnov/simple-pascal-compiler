@@ -22,19 +22,35 @@ lookupSymbol name table =
 data TError = TError {
   errLine :: Int,
   errColumn :: Int,
+  errContext :: TypeContext,
   errMessage :: String }
   deriving (Eq)
 
 instance Show TError where
   show (TError {..}) =
-    printf "[l.%d, c.%d]: %s" errLine errColumn errMessage
+    printf "[l.%d, c.%d] (in %s): %s" errLine errColumn (show errContext) errMessage
 
 instance Error TError where
-  noMsg = TError 0 0 "Unknown error"
-  strMsg s = TError 0 0 s
+  noMsg = TError 0 0 Unknown "Unknown error"
+  strMsg s = TError 0 0 Unknown s
+
+data TypeContext =
+    Unknown
+  | Outside
+  | ProgramBody
+  | InFunction Id Type
+  deriving (Eq)
+
+instance Show TypeContext where
+  show Unknown              = "unknown context"
+  show Outside              = "outside program body"
+  show ProgramBody          = "program body"
+  show (InFunction name TVoid) = "procedure " ++ name
+  show (InFunction name tp) = printf "function %s(): %s" name (show tp)
 
 data CheckState = CheckState {
   symbolTable :: SymbolTable,
+  contexts :: [TypeContext],
   ckLine :: Int,
   ckColumn :: Int }
   deriving (Eq, Show)
@@ -50,6 +66,7 @@ builtinSymbols = M.fromList $ map pair builtinFunctions
 emptyState :: CheckState
 emptyState = CheckState {
   symbolTable = [builtinSymbols],
+  contexts = [],
   ckLine = 0,
   ckColumn = 0 }
 
@@ -72,10 +89,26 @@ failT :: String -> Check b
 failT msg = do
   line <- gets ckLine
   col  <- gets ckColumn
+  cxs <- gets contexts
   throwError $ TError {
                 errLine    = line,
                 errColumn  = col,
+                errContext = if null cxs
+                               then Unknown
+                               else head cxs,
                 errMessage = msg }
+
+enterContext :: TypeContext -> Check ()
+enterContext c = do
+  st <- get
+  put $ st {contexts = c: contexts st}
+
+dropContext :: Check ()
+dropContext = do
+  st <- get
+  case contexts st of
+    []  -> failT "Internal error in TypeCheck: dropContext on empty context!"
+    (_:old) -> put $ st {contexts = old}
 
 setPos :: SrcPos a -> Check ()
 setPos x = do
@@ -124,6 +157,7 @@ withSymbolTable check = do
 instance Typed Program where
   typeCheck p@(content -> Program vars fns body) = withSymbolTable $ do
       setPos p
+      enterContext Outside
       vars' <- forM vars $ \v -> do
                  let (name ::: tp) = content v
                  addSymbol v
@@ -139,8 +173,11 @@ instance Typed Program where
                           srcColumn = srcColumn fn }
                 addSymbol s
                 return fn'
+      dropContext
+      enterContext ProgramBody
       body' <- forM body typeCheck
       let program = Program vars' fns' body'
+      dropContext
       return $ TypeAnn {
         tContent = program,
         srcPos = SrcPos program 0 0,
@@ -189,7 +226,14 @@ instance Typed Statement where
   typeCheck s@(content -> Return x) = do
     setPos s
     x' <- typeCheck x
-    returnT (typeOf x') s (Return x')
+    let retType = typeOf x'
+    cxs <- gets contexts
+    case cxs of
+      (InFunction _ TVoid:_) -> failT "return statement in procedure"
+      (InFunction _ t:_)
+          | t == retType -> returnT (typeOf x') s (Return x')
+          | otherwise    -> failT $ "Return value type does not match: expecting " ++ show t ++ ", got " ++ show retType
+      _                  -> failT $ "return statement not in function"
 
   typeCheck s@(content -> IfThenElse c a b) = do
     setPos s
@@ -217,19 +261,16 @@ instance Typed Statement where
 instance Typed Function where
   typeCheck x@(content -> Function {..}) = do
       setPos x
+      enterContext (InFunction fnName fnResultType)
       addSymbolTable
       args <- mapM varType fnFormalArgs
       vars <- mapM varType fnVars
       body <- mapM typeCheck fnBody
       let fn = Function fnName args fnResultType vars body
           tp = TFunction (map typeOf args) fnResultType
---           pos = SrcPos {
---                   content = fnName ::: tp,
---                   srcLine = srcLine x,
---                   srcColumn = srcColumn x }
       result <- returnT fnResultType x fn
       dropSymbolTable
---       addSymbol pos
+      dropContext
       return $ result {localSymbols = makeSymbolTable vars}
     where
       varType v = do
@@ -265,8 +306,10 @@ instance Typed Expression where
     setPos e
     x' <- typeCheck x
     y' <- typeCheck y
-    case (op, typeOf x', typeOf y') of
-      (_, TInteger, TInteger) -> returnT TInteger e (Op op x' y')
+    case (typeOf x', typeOf y') of
+      (TInteger, TInteger)
+        | op `elem` [IsEQ, IsNE, IsGT, IsLT] -> returnT TBool    e (Op op x' y')
+        | otherwise                          -> returnT TInteger e (Op op x' y')
       _ -> failT $ "Invalid operand types!"
 
 checkTypes :: Program :~ SrcPos -> Program :~ TypeAnn
