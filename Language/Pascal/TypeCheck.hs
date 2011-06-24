@@ -320,12 +320,12 @@ checkTypes prog = evalState check emptyState
       x <- runErrorT (typeCheck prog)
       case x of
         Right result -> return result
-        Left  err -> fail $ show err
+        Left  err -> fail $ "type checker: " ++ show err
 
 checkSource :: FilePath -> IO (Program :~ TypeAnn)
 checkSource path = do
   str <- readFile path
   case parse pProgram path str of
-    Left err -> fail $ show err
+    Left err -> fail $ "type checker: " ++ show err
     Right prog -> return (checkTypes prog)
 
