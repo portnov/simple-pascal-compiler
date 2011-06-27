@@ -230,17 +230,14 @@ instance Typed Statement where
 instance Typed Function where
   typeCheck x@(content -> Function {..}) = do
       setPos x
-      enterContext (InFunction fnName fnResultType)
-      addSymbolTable
-      args <- mapM varType fnFormalArgs
-      vars <- mapM varType fnVars
-      body <- mapM typeCheck fnBody
-      let fn = Function fnName args fnResultType vars body
-          tp = TFunction (map typeOf args) fnResultType
-      result <- returnT fnResultType x fn
-      dropSymbolTable
-      dropContext
-      return $ result {localSymbols = makeSymbolTable vars}
+      inContext (InFunction fnName fnResultType) $ withSymbolTable $ do
+          args <- mapM varType fnFormalArgs
+          vars <- mapM varType fnVars
+          body <- mapM typeCheck fnBody
+          let fn = Function fnName args fnResultType vars body
+              tp = TFunction (map typeOf args) fnResultType
+          result <- returnT fnResultType x fn
+          return $ result {localSymbols = makeSymbolTable vars}
     where
       varType v = do
         let (_ ::: tp) = content v

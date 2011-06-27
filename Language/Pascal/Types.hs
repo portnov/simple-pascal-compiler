@@ -231,3 +231,10 @@ class (Monad m) => Checker m where
   dropContext :: m ()
   failCheck :: String -> m a
 
+inContext :: (Checker m) => Context -> m a -> m a
+inContext cxt actions = do
+  enterContext cxt
+  x <- actions
+  dropContext
+  return x
+
