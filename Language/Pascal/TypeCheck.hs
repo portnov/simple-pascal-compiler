@@ -18,6 +18,7 @@ lookupSymbol name table =
     [] -> Nothing
     (s:_) -> s
 
+builtinSymbols ::  M.Map Id Symbol
 builtinSymbols = M.fromList $ map pair builtinFunctions
   where
     pair (name, tp, _) = (name, Symbol {
@@ -36,13 +37,15 @@ emptyState = CheckState {
 class Typed a where
   typeCheck :: a :~ SrcPos -> Check (a :~ TypeAnn)
 
+typeOfA ::  Annotate node TypeAnn -> Type
+typeOfA = typeOf . annotation
+
+returnT ::  Type -> Annotate node1 SrcPos -> node -> Check (Annotate node TypeAnn)
 returnT t x res =
-  return $ TypeAnn {
-             tContent = res,
+  return $ Annotate res $ TypeAnn {
              srcPos = SrcPos {
-                        content = res,
-                        srcLine = srcLine x,
-                        srcColumn = srcColumn x },
+                        srcLine = srcLine (annotation x),
+                        srcColumn = srcColumn (annotation x) },
              typeOf = t,
              localSymbols = M.empty}
 
@@ -71,10 +74,10 @@ instance Checker Check where
                   errMessage = msg }
 
 
-setPos :: SrcPos a -> Check ()
+setPos :: Annotate a SrcPos -> Check ()
 setPos x = do
   st <- get
-  put $ st {ckLine = srcLine x, ckColumn = srcColumn x}
+  put $ st {ckLine = srcLine (annotation x), ckColumn = srcColumn (annotation x)}
 
 getSymbol :: Id -> Check Symbol
 getSymbol name = do
@@ -83,11 +86,10 @@ getSymbol name = do
     Nothing -> failCheck $ "Unknown symbol: " ++ name
     Just s  -> return s
 
-addSymbol :: SrcPos NameType -> Check ()
-addSymbol (SrcPos {..}) = do
+addSymbol :: Annotate NameType SrcPos -> Check ()
+addSymbol (Annotate (name ::: tp) (SrcPos {..})) = do
   st <- get
   (current:other) <- gets symbolTable
-  let (name ::: tp) = content
   case M.lookup name current of
     Just s -> failCheck $ "Symbol is already defined: " ++ showSymbol s
     Nothing -> do
@@ -118,59 +120,56 @@ withSymbolTable check = do
 instance Typed Program where
   typeCheck p@(content -> Program vars fns body) = withSymbolTable $ do
       setPos p
-      enterContext Outside
-      vars' <- forM vars $ \v -> do
-                 let (name ::: tp) = content v
-                 addSymbol v
-                 return $ v `withType` tp
+      (vars', fns') <- inContext Outside $ do
+          vs <- forM vars $ \v -> do
+                   let (name ::: tp) = content v
+                   addSymbol v
+                   return $ v `withType` tp
 
-      fns' <- forM fns $ \fn -> do
-                fn' <- typeCheck fn
-                let f = tContent fn'
-                    tp = TFunction (argTypes f) (fnResultType f)
-                    s = SrcPos {
-                          content = fnName f ::: tp,
-                          srcLine = srcLine fn,
-                          srcColumn = srcColumn fn }
-                addSymbol s
-                return fn'
-      dropContext
-      enterContext ProgramBody
-      body' <- forM body typeCheck
+          fs <- forM fns $ \fn -> do
+                  fn' <- typeCheck fn
+                  let f = content fn'
+                      tp = TFunction (argTypes f) (fnResultType f)
+                      s = SrcPos {
+                            srcLine = srcLine (annotation fn),
+                            srcColumn = srcColumn (annotation fn) }
+                  addSymbol $ Annotate (fnName f ::: tp) s
+                  return fn'
+          return (vs, fs)
+      body' <- inContext ProgramBody $
+                 forM body typeCheck
       let program = Program vars' fns' body'
-      dropContext
-      return $ TypeAnn {
-        tContent = program,
-        srcPos = SrcPos program 0 0,
+      return $ Annotate program $ TypeAnn {
+        srcPos = SrcPos 0 0,
         typeOf = TVoid,
         localSymbols = makeSymbolTable vars'}
     where
       argTypes :: Function TypeAnn -> [Type]
       argTypes (Function {..}) = map argType fnFormalArgs
 
-      argType (TypeAnn {tContent = _ ::: tp}) = tp
+      argType (Annotate (_ ::: tp) _) = tp
 
-makeSymbolTable :: [TypeAnn NameType] -> M.Map Id Symbol
+makeSymbolTable :: [Annotate NameType TypeAnn ] -> M.Map Id Symbol
 makeSymbolTable xs = M.fromList $ map pair xs
   where
-    pair :: TypeAnn NameType -> (Id, Symbol)
-    pair (TypeAnn {..}) = let (name ::: tp) = tContent
-                          in  (name, Symbol {
-                                       symbolName = name,
-                                       symbolType = tp,
-                                       symbolDefLine = srcLine srcPos,
-                                       symbolDefCol = srcColumn srcPos })
+    pair :: Annotate NameType TypeAnn -> (Id, Symbol)
+    pair (Annotate (name ::: tp) (TypeAnn {..})) =
+      (name, Symbol {
+               symbolName = name,
+               symbolType = tp,
+               symbolDefLine = srcLine srcPos,
+               symbolDefCol = srcColumn srcPos })
 
 instance Typed Statement where
   typeCheck x@(content -> Assign name expr) = do
     setPos x
     sym <- getSymbol name
     rhs <- typeCheck expr
-    if symbolType sym == typeOf rhs
+    if symbolType sym == typeOf (annotation rhs)
       then do
            let result = Assign name rhs
-           returnT (typeOf rhs) x result
-      else failCheck $ "Invalid assignment: LHS type is " ++ show (symbolType sym) ++ ", but RHS type is " ++ show (typeOf rhs)
+           returnT (typeOfA rhs) x result
+      else failCheck $ "Invalid assignment: LHS type is " ++ show (symbolType sym) ++ ", but RHS type is " ++ show (typeOfA rhs)
 
   typeCheck s@(content -> Procedure name args) = do
     setPos s
@@ -178,7 +177,7 @@ instance Typed Statement where
     case symbolType sym of
       TFunction formalArgTypes TVoid -> do
           args' <- mapM typeCheck args
-          let actualTypes = map typeOf args'
+          let actualTypes = map typeOfA args'
           if actualTypes == formalArgTypes
             then returnT TVoid s (Procedure name args')
             else failCheck $ "Invalid types in procedure call: " ++ show actualTypes ++ " instead of " ++ show formalArgTypes
@@ -195,19 +194,19 @@ instance Typed Statement where
   typeCheck s@(content -> Return x) = do
     setPos s
     x' <- typeCheck x
-    let retType = typeOf x'
+    let retType = typeOfA x'
     cxs <- gets contexts
     case cxs of
       (InFunction _ TVoid:_) -> failCheck "return statement in procedure"
       (InFunction _ t:_)
-          | t == retType -> returnT (typeOf x') s (Return x')
+          | t == retType -> returnT (typeOfA x') s (Return x')
           | otherwise    -> failCheck $ "Return value type does not match: expecting " ++ show t ++ ", got " ++ show retType
       _                  -> failCheck $ "return statement not in function"
 
   typeCheck s@(content -> IfThenElse c a b) = do
     setPos s
     c' <- typeCheck c
-    when (typeOf c' /= TBool) $
+    when (typeOfA c' /= TBool) $
       failCheck $ "Condition type is not Boolean: " ++ show c
     a' <- mapM typeCheck a
     b' <- mapM typeCheck b
@@ -219,10 +218,10 @@ instance Typed Statement where
     when (symbolType sym /= TInteger) $
       failCheck $ "Counter variable is not Integer: " ++ name
     start' <- typeCheck start
-    when (typeOf start' /= TInteger) $
+    when (typeOfA start' /= TInteger) $
       failCheck $ "Counter start value is not Integer: " ++ show start
     end' <- typeCheck end
-    when (typeOf end' /= TInteger) $
+    when (typeOfA end' /= TInteger) $
       failCheck $ "Counter end value is not Integer: " ++ show end
     body' <- mapM typeCheck body
     returnT TVoid s (For name start' end' body')
@@ -235,9 +234,9 @@ instance Typed Function where
           vars <- mapM varType fnVars
           body <- mapM typeCheck fnBody
           let fn = Function fnName args fnResultType vars body
-              tp = TFunction (map typeOf args) fnResultType
-          result <- returnT fnResultType x fn
-          return $ result {localSymbols = makeSymbolTable vars}
+              tp = TFunction (map typeOfA args) fnResultType
+          Annotate result ta <- returnT fnResultType x fn
+          return $ Annotate result $ ta {localSymbols = makeSymbolTable vars}
     where
       varType v = do
         let (_ ::: tp) = content v
@@ -262,7 +261,7 @@ instance Typed Expression where
     case symbolType sym of
       TFunction formalArgTypes resType -> do
           args' <- mapM typeCheck args
-          let actualTypes = map typeOf args'
+          let actualTypes = map typeOfA args'
           if actualTypes == formalArgTypes
             then returnT resType e (Call name args')
             else failCheck $ "Invalid types in function call: " ++ show actualTypes ++ " instead of " ++ show formalArgTypes
@@ -272,7 +271,7 @@ instance Typed Expression where
     setPos e
     x' <- typeCheck x
     y' <- typeCheck y
-    case (typeOf x', typeOf y') of
+    case (typeOfA x', typeOfA y') of
       (TInteger, TInteger)
         | op `elem` [IsEQ, IsNE, IsGT, IsLT] -> returnT TBool    e (Op op x' y')
         | otherwise                          -> returnT TInteger e (Op op x' y')

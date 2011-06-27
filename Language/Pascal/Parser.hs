@@ -28,16 +28,16 @@ comma = P.comma pascal
 dot = P.dot pascal
 parens = P.parens pascal
 
-annotate p = do
+withAnnotation :: Parser x -> Parser (Annotate x SrcPos)
+withAnnotation p = do
   pos <- getPosition
   x <- p
-  return $ SrcPos {
-    content = x,
+  return $ Annotate x $ SrcPos {
     srcLine = sourceLine pos,
     srcColumn = sourceColumn pos }
 
 pProgram :: Parser (Program :~ SrcPos)
-pProgram = annotate $ do
+pProgram = withAnnotation $ do
   reserved "program"
   identifier
   semi
@@ -57,13 +57,13 @@ readType str =
     "void"    -> TVoid
     s         -> error $ "Unknown type: " ++ s
 
-pVars :: Parser [SrcPos NameType]
+pVars :: Parser [Annotate NameType SrcPos]
 pVars = do
   reserved "var"
   lists <- pVarsList `sepEndBy1` semi 
   return $ concat lists
 
-pVarsList :: Parser [SrcPos NameType]
+pVarsList :: Parser [Annotate NameType SrcPos]
 pVarsList = do
     pos <- getPosition
     names <- identifier `sepBy` comma
@@ -71,21 +71,20 @@ pVarsList = do
     tp <- identifier
     return $ map (ret tp pos) names
   where
-    ret tp pos name =
+    ret tp pos name = Annotate (name ::: readType tp) $
       SrcPos {
-        content = name ::: readType tp,
         srcLine = sourceLine pos,
         srcColumn = sourceColumn pos }
 
-pNameType :: Parser (SrcPos NameType)
-pNameType = annotate $ do
+pNameType :: Parser (Annotate NameType SrcPos)
+pNameType = withAnnotation $ do
   name <- identifier
   colon
   tp <- identifier
   return $ name ::: readType tp
 
 pFunction :: Parser (Function :~ SrcPos)
-pFunction = annotate $ do
+pFunction = withAnnotation $ do
   reserved "function"
   name <- identifier
   args <- parens $ pNameType `sepBy` comma
@@ -100,7 +99,7 @@ pFunction = annotate $ do
   return $ Function name args (readType res) vars body
 
 pProcedure :: Parser (Function :~ SrcPos)
-pProcedure = annotate $ do
+pProcedure = withAnnotation $ do
   reserved "procedure"
   name <- identifier
   args <- parens $ pNameType `sepBy` comma
@@ -117,30 +116,30 @@ pStatement =
       try pIfThenElse
   <|> try pAssign
   <|> try pProcedureCall
-  <|> try (annotate (reserved "exit" >> return Exit))
+  <|> try (withAnnotation (reserved "exit" >> return Exit))
   <|> try pReturn
   <|> pFor
 
 pAssign :: Parser (Statement :~ SrcPos)
-pAssign = annotate $ do
+pAssign = withAnnotation $ do
   var <- identifier
   symbol ":="
   expr <- pExpression
   return $ Assign var expr
 
-pProcedureCall = annotate $ do
+pProcedureCall = withAnnotation $ do
   name <- identifier
   args <- parens $ pExpression `sepBy` comma
   return $ Procedure name args
 
 pReturn :: Parser (Statement :~ SrcPos)
-pReturn = annotate $ do
+pReturn = withAnnotation $ do
   reserved "return"
   x <- pExpression
   return $ Return x
 
 pIfThenElse :: Parser (Statement :~ SrcPos)
-pIfThenElse = annotate $ do
+pIfThenElse = withAnnotation $ do
   reserved "if"
   cond <- pExpression
   reserved "then"
@@ -159,7 +158,7 @@ pBlock = try (one `fmap` pStatement) <|> do
   where
     one x = [x]
 
-pFor = annotate $ do
+pFor = withAnnotation $ do
   reserved "for"
   var <- identifier
   reserved ":="
@@ -183,13 +182,12 @@ pExpression = buildExpressionParser table term <?> "expression"
     op name fun = do
       pos <- getPosition
       reservedOp name
-      return $ \x y -> SrcPos {
-        content = Op fun x y,
+      return $ \x y -> Annotate (Op fun x y) $ SrcPos {
         srcLine = sourceLine pos,
         srcColumn = sourceColumn pos }
 
 term = parens pExpression
-   <|> try (annotate $ Literal `fmap` pLiteral)
+   <|> try (withAnnotation $ Literal `fmap` pLiteral)
    <|> try pCall
    <|> pVariable
 
@@ -199,10 +197,10 @@ pLiteral = try stringLit <|> try intLit <|> boolLit
     intLit = LInteger `fmap` P.integer pascal 
     boolLit = try (reserved "true" >> return (LBool True)) <|> (reserved "false" >> return (LBool False))
 
-pVariable = annotate $  Variable `fmap` identifier
+pVariable = withAnnotation $  Variable `fmap` identifier
 
 pCall :: Parser (Expression :~ SrcPos)
-pCall = annotate $ do
+pCall = withAnnotation $ do
   name <- identifier
   args <- parens $ pExpression `sepBy` comma
   return $ Call name args

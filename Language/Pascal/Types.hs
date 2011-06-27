@@ -11,53 +11,56 @@ import Language.SSVM.Types
 
 type Id = String
 
-data SrcPos a = SrcPos {
-  content :: a,
+data Annotate node ann = Annotate {
+  content :: node,
+  annotation :: ann }
+  deriving (Eq)
+
+instance (Show node) => Show (Annotate node ann) where
+  show (Annotate x _) = show x
+
+data SrcPos = SrcPos {
   srcLine :: Int,
   srcColumn :: Int }
   deriving (Eq)
 
-data TypeAnn a = TypeAnn {
-  tContent :: a,
-  srcPos :: SrcPos a,
+instance Show SrcPos where
+  show (SrcPos l c) = printf "[l. %d, c. %d]" l c
+
+data TypeAnn = TypeAnn {
+  srcPos :: SrcPos,
   typeOf :: Type,
   localSymbols :: M.Map Id Symbol }
-  deriving (Eq)
+  deriving (Eq, Show)
 
-instance (Show a) => Show (TypeAnn a) where
-  show x = show (tContent x)
+type node :~ ann = Annotate (node ann) ann
 
-withType :: SrcPos a -> Type -> TypeAnn a
-withType p t = TypeAnn {
-  tContent = content p,
-  srcPos   = p,
+withType :: Annotate a SrcPos -> Type -> Annotate a TypeAnn
+withType (Annotate x pos) t = Annotate x $ TypeAnn {
+  srcPos   = pos,
   typeOf   = t,
   localSymbols = M.empty}
 
-type node :~ ann = ann (node ann)
-
-instance (Show a) => Show (SrcPos a) where
-  show x = show (content x)
-
-showSrcPos (SrcPos {..}) = printf "[l.%d, c.%d] %s" srcLine srcColumn (show content)
+annotate :: ann -> Annotate node old -> Annotate node ann
+annotate a (Annotate x _) = Annotate x a
 
 data Program a = Program {
-  progVariables :: [a NameType],
+  progVariables :: [Annotate NameType a],
   progFunctions :: [Function :~ a],
   progBody :: [Statement :~ a]}
 
-deriving instance (Show (a NameType), Show (Function :~ a), Show (Statement :~ a)) => Show (Program a)
-deriving instance (Eq (a NameType), Eq (Function :~ a), Eq (Statement :~ a)) => Eq (Program a)
+deriving instance (Show a, Show (Function :~ a), Show (Statement :~ a)) => Show (Program a)
+deriving instance (Eq a, Eq (Function :~ a), Eq (Statement :~ a)) => Eq (Program a)
 
 data Function a = Function {
   fnName :: String,
-  fnFormalArgs :: [a NameType],
+  fnFormalArgs :: [Annotate NameType a],
   fnResultType :: Type,
-  fnVars :: [a NameType],
+  fnVars :: [Annotate NameType a],
   fnBody :: [Statement :~ a] }
 
-deriving instance (Show (a NameType), Show (Function :~ a), Show (Statement :~ a)) => Show (Function a)
-deriving instance (Eq (a NameType), Eq (Function :~ a), Eq (Statement :~ a)) => Eq (Function a)
+deriving instance (Show a, Show (Function :~ a), Show (Statement :~ a)) => Show (Function a)
+deriving instance (Eq a, Eq (Function :~ a), Eq (Statement :~ a)) => Eq (Function a)
 
 data NameType = Id ::: Type
   deriving (Eq, Show)

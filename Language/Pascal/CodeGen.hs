@@ -104,21 +104,21 @@ class CodeGen a where
   generate :: a -> Generate ()
 
 instance CodeGen (Expression :~ TypeAnn) where
-  generate (tContent -> Variable name) = do
+  generate (content -> Variable name) = do
     var <- getFullName name
     i (CALL var)
     i READ
-  generate (tContent -> Literal x) =
+  generate (content -> Literal x) =
     case x of
       LInteger n -> push n
       LString s  -> push s
       LBool b    -> push (fromIntegral (fromEnum b) :: Integer)
-  generate (tContent -> Call name args) = do
+  generate (content -> Call name args) = do
     forM args generate
     case lookupBuiltin name of
       Just code -> code
       Nothing   -> i (CALL name)
-  generate (tContent -> Op op x y) = do
+  generate (content -> Op op x y) = do
     case op of
       Mod -> generate x >> generate y
       _   -> generate y >> generate x
@@ -135,26 +135,26 @@ instance CodeGen (Expression :~ TypeAnn) where
       IsNE -> i CMP >> i ABS
 
 instance CodeGen (Statement :~ TypeAnn) where
-  generate (tContent -> Assign name expr) = do
+  generate (content -> Assign name expr) = do
     generate expr
     var <- getFullName name
     i (CALL var)
     i ASSIGN
-  generate (tContent -> Procedure name args) = do
+  generate (content -> Procedure name args) = do
     forM args generate
     case lookupBuiltin name of
       Just code -> code
       Nothing   -> i (CALL name)
-  generate (tContent -> Return expr) = do
+  generate (content -> Return expr) = do
     generate expr
     end <- getEndLabel
     i (GETMARK end)
     i GOTO
-  generate (tContent -> Exit) = do
+  generate (content -> Exit) = do
     end <- getEndLabel
     i (GETMARK end)
     i GOTO
-  generate (tContent -> IfThenElse c a b) = do
+  generate (content -> IfThenElse c a b) = do
     generate c
     elseLabel <- labelFrom "else"
     i (GETMARK elseLabel)
@@ -166,7 +166,7 @@ instance CodeGen (Statement :~ TypeAnn) where
     putLabelHere elseLabel
     forM b generate
     putLabelHere endIfLabel
-  generate (tContent -> For name start end body) = do
+  generate (content -> For name start end body) = do
     generate start
     var <- getFullName name
     i (CALL var)
@@ -191,20 +191,20 @@ instance CodeGen (Statement :~ TypeAnn) where
     putLabelHere endLoop
 
 instance CodeGen (Program :~ TypeAnn) where
-  generate (tContent -> Program {..}) = do
+  generate (content -> Program {..}) = do
       forM progVariables $ \v -> do
-        let (name ::: _) = tContent v
+        let (name ::: _) = content v
         declare name
       forM progFunctions $ \fn -> do
-        forM (fnFormalArgs $ tContent fn) $ \a -> do
-          let (name ::: _) = tContent a
+        forM (fnFormalArgs $ content fn) $ \a -> do
+          let (name ::: _) = content a
           i COLON
-          push $ (fnName $ tContent fn) ++ "_" ++ name
+          push $ (fnName $ content fn) ++ "_" ++ name
           i VARIABLE
-        forM (fnVars $ tContent fn) $ \v -> do
-          let (name ::: _) = tContent v
+        forM (fnVars $ content fn) $ \v -> do
+          let (name ::: _) = content v
           i COLON
-          push $ (fnName $ tContent fn) ++ "_" ++ name
+          push $ (fnName $ content fn) ++ "_" ++ name
           i VARIABLE
       forM progFunctions generate
       vars <- gets variables
@@ -219,20 +219,19 @@ instance CodeGen (Program :~ TypeAnn) where
         i VARIABLE
 
 instance CodeGen (Function :~ TypeAnn) where
-  generate (tContent -> Function {..}) = do
+  generate (content -> Function {..}) = do
     i COLON
     push fnName
     setQuoteMode True
-    enterContext (InFunction fnName fnResultType)
-    forM (reverse fnFormalArgs) $ \a -> do
-      let (name ::: _) = tContent a
-      var <- getFullName name
-      i (CALL var)
-      i ASSIGN
-    forM fnBody generate
-    putLabelHere =<< getEndLabel
-    i NOP
-    setQuoteMode False
-    i DEFINE
-    dropContext
+    inContext (InFunction fnName fnResultType) $ do
+        forM (reverse fnFormalArgs) $ \a -> do
+          let (name ::: _) = content a
+          var <- getFullName name
+          i (CALL var)
+          i ASSIGN
+        forM fnBody generate
+        putLabelHere =<< getEndLabel
+        i NOP
+        setQuoteMode False
+        i DEFINE
 
