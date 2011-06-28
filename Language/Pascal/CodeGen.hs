@@ -134,24 +134,43 @@ putLabelHere name = do
       marks = M.insert name n curMarks
   put $ st {generated = gen {cMarks = marks:oldMarks}}
 
+goto :: String -> Generate ()
+goto name = jumpWith GOTO name
+
+jumpWith :: Instruction -> String -> Generate ()
+jumpWith jump name = do
+  i (GETMARK name)
+  i jump
+
+assignTo :: Id -> Generate ()
+assignTo name = do
+  i (CALL name)
+  i ASSIGN
+
+readFrom :: Id -> Generate ()
+readFrom name = do
+  i (CALL name)
+  i READ
+
 class CodeGen a where
   generate :: a -> Generate ()
 
 instance (CodeGen (a TypeAnn)) => CodeGen (a :~ TypeAnn) where
-  generate (content -> x) = generate x
+  generate = generate . content
+
+instance (CodeGen a) => CodeGen [a] where
+  generate list = forM_ list generate
 
 instance CodeGen (Expression TypeAnn) where
   generate (Variable name) = do
-    var <- getFullName name
-    i (CALL var)
-    i READ
+    readFrom =<< getFullName name
   generate (Literal x) =
     case x of
       LInteger n -> push n
       LString s  -> push s
       LBool b    -> push (fromIntegral (fromEnum b) :: Integer)
   generate (Call name args) = do
-    forM args generate
+    generate args
     case lookupBuiltin name of
       Just code -> code
       Nothing   -> i (CALL name)
@@ -174,52 +193,39 @@ instance CodeGen (Expression TypeAnn) where
 instance CodeGen (Statement TypeAnn) where
   generate (Assign name expr) = do
     generate expr
-    var <- getFullName name
-    i (CALL var)
-    i ASSIGN
+    assignTo =<< getFullName name
   generate (Procedure name args) = do
-    forM args generate
+    generate args
     case lookupBuiltin name of
       Just code -> code
       Nothing   -> i (CALL name)
   generate (Return expr) = do
     generate expr
-    end <- getEndLabel
-    i (GETMARK end)
-    i GOTO
+    goto =<< getEndLabel
   generate Break = do
-    end <- forLoopLabel "break" "endFor"
-    i (GETMARK end)
-    i GOTO
+    goto =<< forLoopLabel "break" "endFor"
   generate Continue = do
     start <- forLoopLabel "continue" "forLoop"
     var <- getFullName =<< getForCounter
     -- increment counter
-    i (CALL var)
-    i READ
+    readFrom var
     push (1 :: Integer)
     i ADD
-    i (CALL var)
-    i ASSIGN
+    assignTo var
     -- go to start of loop
-    i (GETMARK start)
-    i GOTO
+    goto start
   generate Exit = do
-    end <- getEndLabel
     -- go to end of procedure or program
-    i (GETMARK end)
-    i GOTO
+    goto =<< getEndLabel
   generate (IfThenElse condition ifStatements elseStatements) = do
     generate condition
     elseLabel <- labelFromHere "else"
-    i (GETMARK elseLabel)
-    i JZ
-    forM ifStatements generate
+    jumpWith JZ elseLabel
+    generate ifStatements 
     endIfLabel <- labelFromHere "endIf"
-    i (GETMARK endIfLabel)
-    i GOTO
+    goto endIfLabel
     putLabelHere elseLabel
-    forM elseStatements generate
+    generate elseStatements 
     putLabelHere endIfLabel
   generate (For counter start end body) = do
     -- get current instruction number
@@ -228,32 +234,25 @@ instance CodeGen (Statement TypeAnn) where
       -- assign start value to counter
       generate start
       var <- getFullName counter
-      i (CALL var)
-      i ASSIGN
+      assignTo var
       -- loop start label
       loop <- forLoopLabel "for" "forLoop"
       putLabelHere loop
       -- check if counter > end value
-      i (CALL var)
-      i READ
+      readFrom var
       generate end
       i CMP
       endLoop <- forLoopLabel "end for" "endFor"
       -- jump to end of cycle if it's done
-      i (GETMARK endLoop)
-      i JGT
-      -- generate loop body
-      forM body generate
+      jumpWith JGT endLoop
+      generate body
       -- increment counter
-      i (CALL var)
-      i READ
+      readFrom var
       push (1 :: Integer)
       i ADD
-      i (CALL var)
-      i ASSIGN
+      assignTo var
       -- go to start of loop
-      i (GETMARK loop)
-      i GOTO
+      goto loop
       putLabelHere endLoop
 
 instance CodeGen (Program TypeAnn) where
@@ -274,13 +273,13 @@ instance CodeGen (Program TypeAnn) where
               push $ (fnName $ content fn) ++ "_" ++ symbolNameC v
               i VARIABLE
       -- generate functions
-      forM progFunctions generate
+      generate progFunctions
       vars <- gets variables
       inContext Outside $ do
           forM vars declare
       -- generate program body
       inContext ProgramBody $ do
-          forM_ progBody generate
+          generate progBody
           putLabelHere =<< getEndLabel
     where
       declare name = do
@@ -295,11 +294,9 @@ instance CodeGen (Function TypeAnn) where
     setQuoteMode True
     inContext (InFunction fnName fnResultType) $ do
         -- get actual arguments values from stack
-        forM (reverse fnFormalArgs) $ \a -> do
-          var <- getFullName (symbolNameC a)
-          i (CALL var)
-          i ASSIGN
-        forM fnBody generate
+        forM (reverse fnFormalArgs) $ \a ->
+          assignTo =<< getFullName (symbolNameC a)
+        generate fnBody
         putLabelHere =<< getEndLabel
         i NOP
         setQuoteMode False
