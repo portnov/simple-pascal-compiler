@@ -7,6 +7,7 @@ import Language.SSVM.Types
 
 import Language.Pascal.Types
 
+-- | Add any stack item to the code
 putItem :: StackItem -> Generate ()
 putItem x = do
   st <- get
@@ -14,6 +15,7 @@ putItem x = do
       code = x: cCode (generated st)
   put $ st {generated = gen {cCode = code}}
 
+-- | Generate instruction
 i :: Instruction -> Generate ()
 i x = do
   q <- gets quoteMode
@@ -21,9 +23,11 @@ i x = do
     then putItem (Quote $ SInstruction x)
     else putItem (SInstruction x)
 
+-- | Generate PUSH instruction
 push :: StackType a => a -> Generate ()
 push x = i (PUSH $ toStack x)
 
+-- | List of builtin functions
 builtinFunctions :: [(Id, Type, Generate ())]
 builtinFunctions =
  [("write",   TFunction [TString] TVoid, write),
@@ -32,6 +36,7 @@ builtinFunctions =
   ("readln",  TFunction [] TString,      readln),
   ("readInt", TFunction [] TInteger,     readln) ]
 
+-- | If named symbol is builtin, return it's definition
 lookupBuiltin :: Id -> Maybe (Generate ())
 lookupBuiltin name = look builtinFunctions
   where

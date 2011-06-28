@@ -12,12 +12,14 @@ import Language.Pascal.Types
 import Language.Pascal.Builtin
 import Language.Pascal.Parser
 
+-- | Look up for named symbol
 lookupSymbol :: Id -> SymbolTable -> Maybe Symbol
 lookupSymbol name table =
   case filter isJust $ map (M.lookup name) table of
     [] -> Nothing
     (s:_) -> s
 
+-- | Symbol table of builtin symbols
 builtinSymbols ::  M.Map Id Symbol
 builtinSymbols = M.fromList $ map pair builtinFunctions
   where
@@ -27,6 +29,7 @@ builtinSymbols = M.fromList $ map pair builtinFunctions
                                  symbolDefLine = 0,
                                  symbolDefCol = 0 })
 
+-- | Starting type checker state
 emptyState :: CheckState
 emptyState = CheckState {
   symbolTable = [builtinSymbols],
@@ -43,6 +46,7 @@ typeOfA = typeOf . annotation
 symbolTypeC :: Annotate Symbol ann -> Type
 symbolTypeC = symbolType . content
 
+isFor :: Context -> Bool
 isFor (ForLoop _ _) = True
 isFor _             = False
 
@@ -83,7 +87,8 @@ instance Checker Check where
 setPos :: Annotate a SrcPos -> Check ()
 setPos x = do
   st <- get
-  put $ st {ckLine = srcLine (annotation x), ckColumn = srcColumn (annotation x)}
+  put $ st {ckLine = srcLine (annotation x),
+            ckColumn = srcColumn (annotation x)}
 
 getSymbol :: Id -> Check Symbol
 getSymbol name = do

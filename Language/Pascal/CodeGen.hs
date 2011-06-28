@@ -33,6 +33,7 @@ instance Checker Generate where
                                  else head cxs,
                   errMessage = msg }
 
+-- | Run code generator
 runCodeGen :: Generate () -> Code
 runCodeGen gen = generated $ execState go emptyGState
   where
@@ -46,6 +47,7 @@ runCodeGen gen = generated $ execState go emptyGState
 symbolNameC :: Annotate Symbol ann -> Id
 symbolNameC = symbolName . content
 
+-- | Get full name of current context
 getContextString :: Generate String
 getContextString = do
     cxs <- gets (map contextId . filter isProgramPart . currentContext)
@@ -59,6 +61,8 @@ setQuoteMode b = do
   st <- get
   put $ st {quoteMode = b}
 
+-- | Get label which is at end of current context
+-- (program or function)
 getEndLabel :: Generate String
 getEndLabel = do
   cstr <- getContextString
@@ -72,11 +76,13 @@ variable seed = do
   put $ st {variables = name: variables st}
   return name
 
+-- | Get full name of variable (with context)
 getFullName :: String -> Generate String
 getFullName seed = do
   cstr <- getContextString
   return $ cstr ++ "_" ++ seed
 
+-- | Put a label and return it's full name
 label :: String -> Generate String
 label seed = do
   st <- get
@@ -89,6 +95,8 @@ label seed = do
   put $ st {generated = gen {cMarks = marks:oldMarks}}
   return name
 
+-- | Return full name of label in the for loop.
+-- fail if current context is not for loop.
 forLoopLabel :: String -> String -> Generate String
 forLoopLabel src seed = do
   cxs <- gets currentContext
@@ -97,6 +105,8 @@ forLoopLabel src seed = do
     (ForLoop _ _:_) -> return $ intercalate "_" (map contextId $ reverse cxs) ++ "_" ++ seed
     _               -> failCheck $ src ++ " not in for loop"
 
+-- | Get name of counter variable of for loop.
+-- fail if current context is not for loop.
 getForCounter :: Generate Id
 getForCounter = do
   cxs <- gets currentContext
@@ -105,14 +115,16 @@ getForCounter = do
     (ForLoop i _:_) -> return i
     _               -> failCheck "Internal error: getForCounter not in for loop!"
 
-labelFrom :: String -> Generate String
-labelFrom seed = do
+-- | Generate full label name
+labelFromHere :: String -> Generate String
+labelFromHere seed = do
   st <- get
   cstr <- getContextString
   let n = length $ cCode (generated st)
       name = cstr ++ "_" ++ seed ++ "_from_" ++ show n
   return name
 
+-- | Put label here
 putLabelHere :: String -> Generate ()
 putLabelHere name = do
   st <- get
@@ -182,53 +194,64 @@ instance CodeGen (Statement TypeAnn) where
   generate Continue = do
     start <- forLoopLabel "continue" "forLoop"
     var <- getFullName =<< getForCounter
+    -- increment counter
     i (CALL var)
     i READ
     push (1 :: Integer)
     i ADD
     i (CALL var)
     i ASSIGN
+    -- go to start of loop
     i (GETMARK start)
     i GOTO
   generate Exit = do
     end <- getEndLabel
+    -- go to end of procedure or program
     i (GETMARK end)
     i GOTO
-  generate (IfThenElse c a b) = do
-    generate c
-    elseLabel <- labelFrom "else"
+  generate (IfThenElse condition ifStatements elseStatements) = do
+    generate condition
+    elseLabel <- labelFromHere "else"
     i (GETMARK elseLabel)
     i JZ
-    forM a generate
-    endIfLabel <- labelFrom "endIf"
+    forM ifStatements generate
+    endIfLabel <- labelFromHere "endIf"
     i (GETMARK endIfLabel)
     i GOTO
     putLabelHere elseLabel
-    forM b generate
+    forM elseStatements generate
     putLabelHere endIfLabel
-  generate (For name start end body) = do
+  generate (For counter start end body) = do
+    -- get current instruction number
     n <- gets (length . cCode . generated)
-    inContext (ForLoop name n) $ do
+    inContext (ForLoop counter n) $ do
+      -- assign start value to counter
       generate start
-      var <- getFullName name
+      var <- getFullName counter
       i (CALL var)
       i ASSIGN
+      -- loop start label
       loop <- forLoopLabel "for" "forLoop"
       putLabelHere loop
+      -- check if counter > end value
       i (CALL var)
       i READ
       generate end
       i CMP
       endLoop <- forLoopLabel "end for" "endFor"
+      -- jump to end of cycle if it's done
       i (GETMARK endLoop)
       i JGT
+      -- generate loop body
       forM body generate
+      -- increment counter
       i (CALL var)
       i READ
       push (1 :: Integer)
       i ADD
       i (CALL var)
       i ASSIGN
+      -- go to start of loop
       i (GETMARK loop)
       i GOTO
       putLabelHere endLoop
@@ -236,8 +259,11 @@ instance CodeGen (Statement TypeAnn) where
 instance CodeGen (Program TypeAnn) where
   generate (Program {..}) = do
       inContext Outside $ do
+          -- declare global variables
           forM progVariables $ \v -> do
             declare (symbolNameC v)
+          -- for all functions, declare their local variables
+          -- and arguments
           forM progFunctions $ \fn -> do
             forM (fnFormalArgs $ content fn) $ \a -> do
               i COLON
@@ -247,18 +273,19 @@ instance CodeGen (Program TypeAnn) where
               i COLON
               push $ (fnName $ content fn) ++ "_" ++ symbolNameC v
               i VARIABLE
+      -- generate functions
       forM progFunctions generate
       vars <- gets variables
       inContext Outside $ do
           forM vars declare
+      -- generate program body
       inContext ProgramBody $ do
           forM_ progBody generate
           putLabelHere =<< getEndLabel
     where
       declare name = do
         i COLON
-        var <- getFullName name
-        push var
+        push =<< getFullName name
         i VARIABLE
 
 instance CodeGen (Function TypeAnn) where
@@ -267,6 +294,7 @@ instance CodeGen (Function TypeAnn) where
     push fnName
     setQuoteMode True
     inContext (InFunction fnName fnResultType) $ do
+        -- get actual arguments values from stack
         forM (reverse fnFormalArgs) $ \a -> do
           var <- getFullName (symbolNameC a)
           i (CALL var)

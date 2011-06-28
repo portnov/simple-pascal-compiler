@@ -9,8 +9,10 @@ import Text.Printf
 
 import Language.SSVM.Types
 
+-- | Type for symbol identifiers
 type Id = String
 
+-- | Attach annotation to node
 data Annotate node ann = Annotate {
   content :: node,
   annotation :: ann }
@@ -19,6 +21,7 @@ data Annotate node ann = Annotate {
 instance (Show node) => Show (Annotate node ann) where
   show (Annotate x _) = show x
 
+-- | Position of node in the source code
 data SrcPos = SrcPos {
   srcLine :: Int,
   srcColumn :: Int }
@@ -27,57 +30,70 @@ data SrcPos = SrcPos {
 instance Show SrcPos where
   show (SrcPos l c) = printf "[l. %d, c. %d]" l c
 
+-- | Node type info
 data TypeAnn = TypeAnn {
   srcPos :: SrcPos,
   typeOf :: Type,
   localSymbols :: M.Map Id Symbol }
   deriving (Eq, Show)
 
+-- | Recursive annotated type
 type node :~ ann = Annotate (node ann) ann
 
+-- | Attach type info to node
 withType :: Annotate a SrcPos -> Type -> Annotate a TypeAnn
 withType (Annotate x pos) t = Annotate x $ TypeAnn {
   srcPos   = pos,
   typeOf   = t,
   localSymbols = M.empty}
 
+-- | Change annotation of annotated node
 annotate :: ann -> Annotate node old -> Annotate node ann
 annotate a (Annotate x _) = Annotate x a
 
+-- | Program
 data Program a = Program {
-  progVariables :: [Annotate Symbol a],
-  progFunctions :: [Function :~ a],
-  progBody :: [Statement :~ a]}
+  progVariables :: [Annotate Symbol a], -- ^ global variables
+  progFunctions :: [Function :~ a],     -- ^ functions
+  progBody :: [Statement :~ a]          -- ^ program body statements
+  }        
 
 deriving instance (Show a, Show (Function :~ a), Show (Statement :~ a)) => Show (Program a)
 deriving instance (Eq a, Eq (Function :~ a), Eq (Statement :~ a)) => Eq (Program a)
 
+-- | Function (or procedure)
 data Function a = Function {
-  fnName :: String,
-  fnFormalArgs :: [Annotate Symbol a],
-  fnResultType :: Type,
-  fnVars :: [Annotate Symbol a],
-  fnBody :: [Statement :~ a] }
+  fnName :: String,                    -- ^ function name
+  fnFormalArgs :: [Annotate Symbol a], -- ^ formal arguments
+  fnResultType :: Type,                -- ^ return type (if TVoid then this is procedure)
+  fnVars :: [Annotate Symbol a],       -- ^ local variables
+  fnBody :: [Statement :~ a]           -- ^ function body statements
+  }
 
 deriving instance (Show a, Show (Function :~ a), Show (Statement :~ a)) => Show (Function a)
 deriving instance (Eq a, Eq (Function :~ a), Eq (Statement :~ a)) => Eq (Function a)
 
+-- | Symbol table
 type SymbolTable = [M.Map Id Symbol]
 
+-- | A symbol
 data Symbol = Symbol {
   symbolName :: Id,
   symbolType :: Type,
-  symbolDefLine :: Int,
-  symbolDefCol :: Int }
+  symbolDefLine :: Int, -- ^ Source line where symbol was defined
+  symbolDefCol :: Int   -- ^ Source column
+  }
   deriving (Eq)
 
 instance Show Symbol where
   show (Symbol {..}) = symbolName ++ ": " ++ show symbolType
 
+showSymbol :: Symbol -> String
 showSymbol (Symbol {..}) =
   printf "%s: %s (defined at l.%d, c.%d)"
          symbolName (show symbolType) symbolDefLine symbolDefCol
 
+-- | Make symbol from it's name and type
 (#) :: Id -> Type -> Symbol
 name # tp = Symbol {
   symbolName = name,
@@ -85,12 +101,13 @@ name # tp = Symbol {
   symbolDefLine = 0,
   symbolDefCol = 0 }
 
+-- | Supported data types
 data Type =
     TInteger
   | TString
   | TBool
   | TVoid
-  | TFunction [Type] Type
+  | TFunction [Type] Type -- ^ formal arguments types and return type
   deriving (Eq)
 
 instance Show Type where
@@ -103,15 +120,16 @@ instance Show Type where
   show (TFunction args res) =
     "function (" ++ intercalate ", " (map show args) ++ "): " ++ show res
 
+-- | Program statements
 data Statement a =
-    Assign Id (Expression :~ a)
-  | Procedure Id [Expression :~ a]
-  | Return (Expression :~ a)
-  | Break
-  | Continue
-  | Exit
-  | IfThenElse (Expression :~ a) [Statement :~ a] [Statement :~ a]
-  | For Id (Expression :~ a) (Expression :~ a) [Statement :~ a]
+    Assign Id (Expression :~ a)                                    -- ^ variable := expression;
+  | Procedure Id [Expression :~ a]                                 -- ^ procedureName(arguments);
+  | Return (Expression :~ a)                                       -- ^ return expression;
+  | Break                                                          -- ^ break (for loop)
+  | Continue                                                       -- ^ contnune (for loop)
+  | Exit                                                           -- ^ exit (procedure or program)
+  | IfThenElse (Expression :~ a) [Statement :~ a] [Statement :~ a] -- ^ if expression then ... else ...
+  | For Id (Expression :~ a) (Expression :~ a) [Statement :~ a]    -- ^ for i := start to end do ...
 
 deriving instance (Eq (Expression :~ a), Eq (Statement :~ a)) => Eq (Statement a)
 
@@ -125,6 +143,7 @@ instance (Show (Expression :~ a), Show (Statement :~ a)) => Show (Statement a) w
   show (IfThenElse c a b) = "if " ++ show c ++ " then " ++ show a ++ "else" ++ show b ++ ";"
   show (For name start end body) = "for " ++ name ++ " := " ++ show start ++ " to " ++ show end ++ show body
 
+-- | Literal values
 data Lit =
     LInteger Integer
   | LString String
@@ -136,11 +155,12 @@ instance Show Lit where
   show (LString s)  = s
   show (LBool b)    = show b
 
+-- | Expressions
 data Expression a =
-    Variable Id
-  | Literal Lit
-  | Call Id [Expression :~ a]
-  | Op BinOp (Expression :~ a) (Expression :~ a)
+    Variable Id                                  -- ^ named variable value
+  | Literal Lit                                  -- ^ literal value
+  | Call Id [Expression :~ a]                    -- ^ functionName(arguments)
+  | Op BinOp (Expression :~ a) (Expression :~ a) -- ^ binary operation (x+y etc)
 
 deriving instance (Eq (Expression :~ a)) => Eq (Expression a)
 
@@ -150,6 +170,7 @@ instance (Show (Expression :~ a)) => Show (Expression a) where
    show (Call name args) = name ++ "(" ++ intercalate ", " (map show args) ++ ")"
    show (Op op x y) = "(" ++ show x ++ " " ++ show op ++ " " ++ show y ++ ")"
 
+-- | Supported binary operations
 data BinOp =
     Add
   | Sub
@@ -175,13 +196,15 @@ instance Show BinOp where
   show IsEQ = "="
   show IsNE = "!="
 
+-- | Code generator state
 data CodeGenState = CGState {
-  variables :: [Id],
-  currentContext :: [Context],
-  quoteMode :: Bool,
-  generated :: Code }
+  variables :: [Id],           -- ^ declared variables (not used currently)
+  currentContext :: [Context], -- ^ current contexts stack
+  quoteMode :: Bool,           -- ^ quote (word declaration) mode
+  generated :: Code }          -- ^ already generated code
   deriving (Eq, Show)
 
+-- | Starting code generator state
 emptyGState :: CodeGenState
 emptyGState = CGState {
   variables = [],
@@ -189,6 +212,7 @@ emptyGState = CGState {
   quoteMode = False,
   generated = Code [M.empty] [] }
 
+-- | Compiler error
 data TError = TError {
   errLine :: Int,
   errColumn :: Int,
@@ -204,12 +228,13 @@ instance Error TError where
   noMsg = TError 0 0 Unknown "Unknown error"
   strMsg s = TError 0 0 Unknown s
 
+-- | Compiler context (where we are?)
 data Context =
-    Unknown
-  | Outside
-  | ProgramBody
-  | ForLoop Id Int
-  | InFunction Id Type
+    Unknown            -- ^ unknown context (== internal error)
+  | Outside            -- ^ Outside program body or functions
+  | ProgramBody        -- ^ In the program body
+  | ForLoop Id Int     -- ^ In the for loop (started on nth instruction, with named counter)
+  | InFunction Id Type -- ^ In the named function (returning named type)
   deriving (Eq)
 
 instance Show Context where
@@ -220,6 +245,7 @@ instance Show Context where
   show (InFunction name TVoid) = "procedure " ++ name
   show (InFunction name tp) = printf "function %s(): %s" name (show tp)
 
+-- | Context ID, for labels and variable names generation
 contextId :: Context -> String
 contextId Unknown             = "unknown"
 contextId Outside             = "main"
@@ -227,6 +253,7 @@ contextId ProgramBody         = "main"
 contextId (ForLoop i n)       = "for_" ++ i ++ "_at_" ++ show n
 contextId (InFunction name _) = name
 
+-- | Type checker state
 data CheckState = CheckState {
   symbolTable :: SymbolTable,
   contexts :: [Context],
