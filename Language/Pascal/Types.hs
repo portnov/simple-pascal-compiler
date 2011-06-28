@@ -45,7 +45,7 @@ annotate :: ann -> Annotate node old -> Annotate node ann
 annotate a (Annotate x _) = Annotate x a
 
 data Program a = Program {
-  progVariables :: [Annotate NameType a],
+  progVariables :: [Annotate Symbol a],
   progFunctions :: [Function :~ a],
   progBody :: [Statement :~ a]}
 
@@ -54,16 +54,13 @@ deriving instance (Eq a, Eq (Function :~ a), Eq (Statement :~ a)) => Eq (Program
 
 data Function a = Function {
   fnName :: String,
-  fnFormalArgs :: [Annotate NameType a],
+  fnFormalArgs :: [Annotate Symbol a],
   fnResultType :: Type,
-  fnVars :: [Annotate NameType a],
+  fnVars :: [Annotate Symbol a],
   fnBody :: [Statement :~ a] }
 
 deriving instance (Show a, Show (Function :~ a), Show (Statement :~ a)) => Show (Function a)
 deriving instance (Eq a, Eq (Function :~ a), Eq (Statement :~ a)) => Eq (Function a)
-
-data NameType = Id ::: Type
-  deriving (Eq, Show)
 
 type SymbolTable = [M.Map Id Symbol]
 
@@ -80,6 +77,13 @@ instance Show Symbol where
 showSymbol (Symbol {..}) =
   printf "%s: %s (defined at l.%d, c.%d)"
          symbolName (show symbolType) symbolDefLine symbolDefCol
+
+(#) :: Id -> Type -> Symbol
+name # tp = Symbol {
+  symbolName = name,
+  symbolType = tp,
+  symbolDefLine = 0,
+  symbolDefCol = 0 }
 
 data Type =
     TInteger

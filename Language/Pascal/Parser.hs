@@ -57,13 +57,13 @@ readType str =
     "void"    -> TVoid
     s         -> error $ "Unknown type: " ++ s
 
-pVars :: Parser [Annotate NameType SrcPos]
+pVars :: Parser [Annotate Symbol SrcPos]
 pVars = do
   reserved "var"
   lists <- pVarsList `sepEndBy1` semi 
   return $ concat lists
 
-pVarsList :: Parser [Annotate NameType SrcPos]
+pVarsList :: Parser [Annotate Symbol SrcPos]
 pVarsList = do
     pos <- getPosition
     names <- identifier `sepBy` comma
@@ -71,17 +71,17 @@ pVarsList = do
     tp <- identifier
     return $ map (ret tp pos) names
   where
-    ret tp pos name = Annotate (name ::: readType tp) $
+    ret tp pos name = Annotate (name # readType tp) $
       SrcPos {
         srcLine = sourceLine pos,
         srcColumn = sourceColumn pos }
 
-pNameType :: Parser (Annotate NameType SrcPos)
+pNameType :: Parser (Annotate Symbol SrcPos)
 pNameType = withAnnotation $ do
   name <- identifier
   colon
   tp <- identifier
-  return $ name ::: readType tp
+  return $ name # readType tp
 
 pFunction :: Parser (Function :~ SrcPos)
 pFunction = withAnnotation $ do

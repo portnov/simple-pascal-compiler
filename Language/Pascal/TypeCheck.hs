@@ -40,6 +40,9 @@ class Typed a where
 typeOfA ::  Annotate node TypeAnn -> Type
 typeOfA = typeOf . annotation
 
+symbolTypeC :: Annotate Symbol ann -> Type
+symbolTypeC = symbolType . content
+
 returnT ::  Type -> Annotate node1 SrcPos -> node -> Check (Annotate node TypeAnn)
 returnT t x res =
   return $ Annotate res $ TypeAnn {
@@ -86,14 +89,14 @@ getSymbol name = do
     Nothing -> failCheck $ "Unknown symbol: " ++ name
     Just s  -> return s
 
-addSymbol :: Annotate NameType SrcPos -> Check ()
-addSymbol (Annotate (name ::: tp) (SrcPos {..})) = do
+addSymbol :: Annotate Symbol SrcPos -> Check ()
+addSymbol (Annotate (Symbol {..}) (SrcPos {..})) = do
   st <- get
   (current:other) <- gets symbolTable
-  case M.lookup name current of
+  case M.lookup symbolName current of
     Just s -> failCheck $ "Symbol is already defined: " ++ showSymbol s
     Nothing -> do
-      let new = M.insert name (Symbol name tp srcLine srcColumn) current
+      let new = M.insert symbolName (Symbol symbolName symbolType srcLine srcColumn) current
       put $ st {symbolTable = (new:other)}
 
 addSymbolTable :: Check ()
@@ -122,9 +125,8 @@ instance Typed Program where
       setPos p
       (vars', fns') <- inContext Outside $ do
           vs <- forM vars $ \v -> do
-                   let (name ::: tp) = content v
                    addSymbol v
-                   return $ v `withType` tp
+                   return $ v `withType` symbolTypeC v
 
           fs <- forM fns $ \fn -> do
                   fn' <- typeCheck fn
@@ -133,7 +135,7 @@ instance Typed Program where
                       s = SrcPos {
                             srcLine = srcLine (annotation fn),
                             srcColumn = srcColumn (annotation fn) }
-                  addSymbol $ Annotate (fnName f ::: tp) s
+                  addSymbol $ Annotate (fnName f # tp) s
                   return fn'
           return (vs, fs)
       body' <- inContext ProgramBody $
@@ -145,31 +147,28 @@ instance Typed Program where
         localSymbols = makeSymbolTable vars'}
     where
       argTypes :: Function TypeAnn -> [Type]
-      argTypes (Function {..}) = map argType fnFormalArgs
+      argTypes (Function {..}) = map symbolTypeC fnFormalArgs
 
-      argType (Annotate (_ ::: tp) _) = tp
-
-makeSymbolTable :: [Annotate NameType TypeAnn ] -> M.Map Id Symbol
+makeSymbolTable :: [Annotate Symbol TypeAnn] -> M.Map Id Symbol
 makeSymbolTable xs = M.fromList $ map pair xs
   where
-    pair :: Annotate NameType TypeAnn -> (Id, Symbol)
-    pair (Annotate (name ::: tp) (TypeAnn {..})) =
-      (name, Symbol {
-               symbolName = name,
-               symbolType = tp,
-               symbolDefLine = srcLine srcPos,
-               symbolDefCol = srcColumn srcPos })
+    pair :: Annotate Symbol TypeAnn -> (Id, Symbol)
+    pair (Annotate s (TypeAnn {..})) =
+      (symbolName s,
+       s { symbolDefLine = srcLine srcPos,
+           symbolDefCol  = srcColumn srcPos })
 
 instance Typed Statement where
   typeCheck x@(content -> Assign name expr) = do
     setPos x
     sym <- getSymbol name
     rhs <- typeCheck expr
-    if symbolType sym == typeOf (annotation rhs)
+    let rhsType = typeOfA rhs
+    if symbolType sym == rhsType
       then do
            let result = Assign name rhs
-           returnT (typeOfA rhs) x result
-      else failCheck $ "Invalid assignment: LHS type is " ++ show (symbolType sym) ++ ", but RHS type is " ++ show (typeOfA rhs)
+           returnT rhsType x result
+      else failCheck $ "Invalid assignment: LHS type is " ++ show (symbolType sym) ++ ", but RHS type is " ++ show rhsType
 
   typeCheck s@(content -> Procedure name args) = do
     setPos s
@@ -239,9 +238,8 @@ instance Typed Function where
           return $ Annotate result $ ta {localSymbols = makeSymbolTable vars}
     where
       varType v = do
-        let (_ ::: tp) = content v
         addSymbol v
-        return $ v `withType` tp
+        return $ v `withType` symbolTypeC v
 
 instance Typed Expression where
   typeCheck e@(content -> Variable x) = do
@@ -291,6 +289,6 @@ checkSource :: FilePath -> IO (Program :~ TypeAnn)
 checkSource path = do
   str <- readFile path
   case parse pProgram path str of
-    Left err -> fail $ "type checker: " ++ show err
+    Left err -> fail $ "parser: " ++ show err
     Right prog -> return (checkTypes prog)
 

@@ -43,6 +43,9 @@ runCodeGen gen = generated $ execState go emptyGState
         Right result -> return result
         Left  err    -> fail $ "code generator: " ++ show err
 
+symbolNameC :: Annotate Symbol ann -> Id
+symbolNameC = symbolName . content
+
 getContextString :: Generate String
 getContextString = do
   cxs <- gets (map contextId . currentContext)
@@ -193,18 +196,15 @@ instance CodeGen (Statement :~ TypeAnn) where
 instance CodeGen (Program :~ TypeAnn) where
   generate (content -> Program {..}) = do
       forM progVariables $ \v -> do
-        let (name ::: _) = content v
-        declare name
+        declare (symbolNameC v)
       forM progFunctions $ \fn -> do
         forM (fnFormalArgs $ content fn) $ \a -> do
-          let (name ::: _) = content a
           i COLON
-          push $ (fnName $ content fn) ++ "_" ++ name
+          push $ (fnName $ content fn) ++ "_" ++ symbolNameC a
           i VARIABLE
         forM (fnVars $ content fn) $ \v -> do
-          let (name ::: _) = content v
           i COLON
-          push $ (fnName $ content fn) ++ "_" ++ name
+          push $ (fnName $ content fn) ++ "_" ++ symbolNameC v
           i VARIABLE
       forM progFunctions generate
       vars <- gets variables
@@ -225,8 +225,7 @@ instance CodeGen (Function :~ TypeAnn) where
     setQuoteMode True
     inContext (InFunction fnName fnResultType) $ do
         forM (reverse fnFormalArgs) $ \a -> do
-          let (name ::: _) = content a
-          var <- getFullName name
+          var <- getFullName (symbolNameC a)
           i (CALL var)
           i ASSIGN
         forM fnBody generate
