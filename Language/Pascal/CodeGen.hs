@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeSynonymInstances, TypeOperators, ViewPatterns, FlexibleInstances, RecordWildCards #-}
+{-# LANGUAGE TypeSynonymInstances, TypeOperators, ViewPatterns, FlexibleInstances, RecordWildCards, FlexibleContexts #-}
 module Language.Pascal.CodeGen where
 
 import Control.Monad
@@ -125,22 +125,25 @@ putLabelHere name = do
 class CodeGen a where
   generate :: a -> Generate ()
 
-instance CodeGen (Expression :~ TypeAnn) where
-  generate (content -> Variable name) = do
+instance (CodeGen (a TypeAnn)) => CodeGen (a :~ TypeAnn) where
+  generate (content -> x) = generate x
+
+instance CodeGen (Expression TypeAnn) where
+  generate (Variable name) = do
     var <- getFullName name
     i (CALL var)
     i READ
-  generate (content -> Literal x) =
+  generate (Literal x) =
     case x of
       LInteger n -> push n
       LString s  -> push s
       LBool b    -> push (fromIntegral (fromEnum b) :: Integer)
-  generate (content -> Call name args) = do
+  generate (Call name args) = do
     forM args generate
     case lookupBuiltin name of
       Just code -> code
       Nothing   -> i (CALL name)
-  generate (content -> Op op x y) = do
+  generate (Op op x y) = do
     case op of
       Mod -> generate x >> generate y
       _   -> generate y >> generate x
@@ -156,27 +159,27 @@ instance CodeGen (Expression :~ TypeAnn) where
       IsEQ -> i CMP >> i ABS >> push (1 :: Integer) >> i SUB
       IsNE -> i CMP >> i ABS
 
-instance CodeGen (Statement :~ TypeAnn) where
-  generate (content -> Assign name expr) = do
+instance CodeGen (Statement TypeAnn) where
+  generate (Assign name expr) = do
     generate expr
     var <- getFullName name
     i (CALL var)
     i ASSIGN
-  generate (content -> Procedure name args) = do
+  generate (Procedure name args) = do
     forM args generate
     case lookupBuiltin name of
       Just code -> code
       Nothing   -> i (CALL name)
-  generate (content -> Return expr) = do
+  generate (Return expr) = do
     generate expr
     end <- getEndLabel
     i (GETMARK end)
     i GOTO
-  generate (content -> Break) = do
+  generate Break = do
     end <- forLoopLabel "break" "endFor"
     i (GETMARK end)
     i GOTO
-  generate (content -> Continue) = do
+  generate Continue = do
     start <- forLoopLabel "continue" "forLoop"
     var <- getFullName =<< getForCounter
     i (CALL var)
@@ -187,11 +190,11 @@ instance CodeGen (Statement :~ TypeAnn) where
     i ASSIGN
     i (GETMARK start)
     i GOTO
-  generate (content -> Exit) = do
+  generate Exit = do
     end <- getEndLabel
     i (GETMARK end)
     i GOTO
-  generate (content -> IfThenElse c a b) = do
+  generate (IfThenElse c a b) = do
     generate c
     elseLabel <- labelFrom "else"
     i (GETMARK elseLabel)
@@ -203,7 +206,7 @@ instance CodeGen (Statement :~ TypeAnn) where
     putLabelHere elseLabel
     forM b generate
     putLabelHere endIfLabel
-  generate (content -> For name start end body) = do
+  generate (For name start end body) = do
     n <- gets (length . cCode . generated)
     inContext (ForLoop name n) $ do
       generate start
@@ -230,8 +233,8 @@ instance CodeGen (Statement :~ TypeAnn) where
       i GOTO
       putLabelHere endLoop
 
-instance CodeGen (Program :~ TypeAnn) where
-  generate (content -> Program {..}) = do
+instance CodeGen (Program TypeAnn) where
+  generate (Program {..}) = do
       inContext Outside $ do
           forM progVariables $ \v -> do
             declare (symbolNameC v)
@@ -258,8 +261,8 @@ instance CodeGen (Program :~ TypeAnn) where
         push var
         i VARIABLE
 
-instance CodeGen (Function :~ TypeAnn) where
-  generate (content -> Function {..}) = do
+instance CodeGen (Function TypeAnn) where
+  generate (Function {..}) = do
     i COLON
     push fnName
     setQuoteMode True
