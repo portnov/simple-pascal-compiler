@@ -1,5 +1,5 @@
 {-# LANGUAGE RecordWildCards, TypeOperators, StandaloneDeriving, FlexibleContexts, UndecidableInstances #-}
-module Language.Pascal.Parser where
+module Language.Pascal.Parser (parseSource, pProgram) where
 
 import Data.Char
 import Text.Parsec

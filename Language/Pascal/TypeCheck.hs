@@ -1,5 +1,9 @@
 {-# LANGUAGE RecordWildCards, TypeOperators, TypeSynonymInstances, FlexibleInstances, ViewPatterns #-}
-module Language.Pascal.TypeCheck where
+module Language.Pascal.TypeCheck
+  (checkTypes,
+   checkSource,
+   builtinSymbols
+  ) where
 
 import Control.Monad
 import Control.Monad.State

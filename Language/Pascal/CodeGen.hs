@@ -1,5 +1,5 @@
 {-# LANGUAGE TypeSynonymInstances, TypeOperators, ViewPatterns, FlexibleInstances, RecordWildCards, FlexibleContexts #-}
-module Language.Pascal.CodeGen where
+module Language.Pascal.CodeGen (runCodeGen, CodeGen (..)) where
 
 import Control.Monad
 import Control.Monad.State
@@ -162,18 +162,21 @@ instance (CodeGen a) => CodeGen [a] where
   generate list = forM_ list generate
 
 instance CodeGen (Expression TypeAnn) where
-  generate (Variable name) = do
+  generate (Variable name) =
     readFrom =<< getFullName name
+
   generate (Literal x) =
     case x of
       LInteger n -> push n
       LString s  -> push s
       LBool b    -> push (fromIntegral (fromEnum b) :: Integer)
+
   generate (Call name args) = do
     generate args
     case lookupBuiltin name of
       Just code -> code
       Nothing   -> i (CALL name)
+
   generate (Op op x y) = do
     case op of
       Mod -> generate x >> generate y
@@ -194,16 +197,20 @@ instance CodeGen (Statement TypeAnn) where
   generate (Assign name expr) = do
     generate expr
     assignTo =<< getFullName name
+
   generate (Procedure name args) = do
     generate args
     case lookupBuiltin name of
       Just code -> code
       Nothing   -> i (CALL name)
+
   generate (Return expr) = do
     generate expr
     goto =<< getEndLabel
-  generate Break = do
+
+  generate Break =
     goto =<< forLoopLabel "break" "endFor"
+
   generate Continue = do
     start <- forLoopLabel "continue" "forLoop"
     var <- getFullName =<< getForCounter
@@ -214,9 +221,11 @@ instance CodeGen (Statement TypeAnn) where
     assignTo var
     -- go to start of loop
     goto start
-  generate Exit = do
+
+  generate Exit =
     -- go to end of procedure or program
     goto =<< getEndLabel
+
   generate (IfThenElse condition ifStatements elseStatements) = do
     generate condition
     elseLabel <- labelFromHere "else"
@@ -227,6 +236,7 @@ instance CodeGen (Statement TypeAnn) where
     putLabelHere elseLabel
     generate elseStatements 
     putLabelHere endIfLabel
+
   generate (For counter start end body) = do
     -- get current instruction number
     n <- gets (length . cCode . generated)
@@ -259,7 +269,7 @@ instance CodeGen (Program TypeAnn) where
   generate (Program {..}) = do
       inContext Outside $ do
           -- declare global variables
-          forM progVariables $ \v -> do
+          forM progVariables $ \v ->
             declare (symbolNameC v)
           -- for all functions, declare their local variables
           -- and arguments

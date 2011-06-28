@@ -1,5 +1,9 @@
 
-module Language.Pascal.Builtin where
+module Language.Pascal.Builtin
+  (i, push,
+   builtinFunctions,
+   lookupBuiltin
+  ) where
 
 import Control.Monad.State
 
