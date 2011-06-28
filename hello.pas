@@ -33,7 +33,7 @@ begin
     hello(i);
     if i = 12
       then writeln("Dozen.");
-    if i = 16
+    if i = 20
       then break;
     end;
 end.
