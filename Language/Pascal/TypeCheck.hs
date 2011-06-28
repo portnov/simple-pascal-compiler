@@ -211,7 +211,7 @@ instance Typed Statement where
     b' <- mapM typeCheck b
     returnT TVoid s (IfThenElse c' a' b')
 
-  typeCheck s@(content -> For name start end body) = do
+  typeCheck s@(content -> For name start end body) = inContext (ForLoop 0) $ do
     setPos s
     sym <- getSymbol name
     when (symbolType sym /= TInteger) $

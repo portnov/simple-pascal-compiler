@@ -204,6 +204,7 @@ data Context =
     Unknown
   | Outside
   | ProgramBody
+  | ForLoop Int
   | InFunction Id Type
   deriving (Eq)
 
@@ -211,13 +212,15 @@ instance Show Context where
   show Unknown              = "unknown context"
   show Outside              = "outside program body"
   show ProgramBody          = "program body"
+  show (ForLoop _)          = "for loop"
   show (InFunction name TVoid) = "procedure " ++ name
   show (InFunction name tp) = printf "function %s(): %s" name (show tp)
 
 contextId :: Context -> String
 contextId Unknown             = "unknown"
-contextId Outside             = "global"
+contextId Outside             = "main"
 contextId ProgramBody         = "main"
+contextId (ForLoop n)         = "forLoop_at_" ++ show n
 contextId (InFunction name _) = name
 
 data CheckState = CheckState {

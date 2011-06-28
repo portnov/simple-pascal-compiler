@@ -48,8 +48,11 @@ symbolNameC = symbolName . content
 
 getContextString :: Generate String
 getContextString = do
-  cxs <- gets (map contextId . currentContext)
-  return $ intercalate "_" cxs
+    cxs <- gets (map contextId . filter isProgramPart . currentContext)
+    return $ intercalate "_" (reverse cxs)
+  where
+    isProgramPart (ForLoop _) = False
+    isProgramPart _           = True
 
 setQuoteMode :: Bool -> Generate ()
 setQuoteMode b = do
@@ -85,6 +88,14 @@ label seed = do
       marks = M.insert name n curMarks
   put $ st {generated = gen {cMarks = marks:oldMarks}}
   return name
+
+forLoopLabel :: String -> String -> Generate String
+forLoopLabel src seed = do
+  cxs <- gets currentContext
+  case cxs of
+    []            -> failCheck "Internal error: forLoopLabel on empty context!"
+    (ForLoop _:_) -> return $ intercalate "_" (map contextId $ reverse cxs) ++ "_" ++ seed
+    _             -> failCheck $ src ++ " not in for loop"
 
 labelFrom :: String -> Generate String
 labelFrom seed = do
@@ -170,47 +181,52 @@ instance CodeGen (Statement :~ TypeAnn) where
     forM b generate
     putLabelHere endIfLabel
   generate (content -> For name start end body) = do
-    generate start
-    var <- getFullName name
-    i (CALL var)
-    i ASSIGN
-    loop <- label "forLoop"
-    i (CALL var)
-    i READ
-    generate end
-    i CMP
-    endLoop <- labelFrom "endFor"
-    i (GETMARK endLoop)
-    i JGT
-    forM body generate
-    i (CALL var)
-    i READ
-    push (1 :: Integer)
-    i ADD
-    i (CALL var)
-    i ASSIGN
-    i (GETMARK loop)
-    i GOTO
-    putLabelHere endLoop
+    n <- gets (length . cCode . generated)
+    inContext (ForLoop n) $ do
+      generate start
+      var <- getFullName name
+      i (CALL var)
+      i ASSIGN
+      loop <- label "forLoop"
+      i (CALL var)
+      i READ
+      generate end
+      i CMP
+      endLoop <- forLoopLabel "end for" "endFor"
+      i (GETMARK endLoop)
+      i JGT
+      forM body generate
+      i (CALL var)
+      i READ
+      push (1 :: Integer)
+      i ADD
+      i (CALL var)
+      i ASSIGN
+      i (GETMARK loop)
+      i GOTO
+      putLabelHere endLoop
 
 instance CodeGen (Program :~ TypeAnn) where
   generate (content -> Program {..}) = do
-      forM progVariables $ \v -> do
-        declare (symbolNameC v)
-      forM progFunctions $ \fn -> do
-        forM (fnFormalArgs $ content fn) $ \a -> do
-          i COLON
-          push $ (fnName $ content fn) ++ "_" ++ symbolNameC a
-          i VARIABLE
-        forM (fnVars $ content fn) $ \v -> do
-          i COLON
-          push $ (fnName $ content fn) ++ "_" ++ symbolNameC v
-          i VARIABLE
+      inContext Outside $ do
+          forM progVariables $ \v -> do
+            declare (symbolNameC v)
+          forM progFunctions $ \fn -> do
+            forM (fnFormalArgs $ content fn) $ \a -> do
+              i COLON
+              push $ (fnName $ content fn) ++ "_" ++ symbolNameC a
+              i VARIABLE
+            forM (fnVars $ content fn) $ \v -> do
+              i COLON
+              push $ (fnName $ content fn) ++ "_" ++ symbolNameC v
+              i VARIABLE
       forM progFunctions generate
       vars <- gets variables
-      forM vars declare
-      forM_ progBody generate
-      putLabelHere =<< getEndLabel
+      inContext Outside $ do
+          forM vars declare
+      inContext ProgramBody $ do
+          forM_ progBody generate
+          putLabelHere =<< getEndLabel
     where
       declare name = do
         i COLON
