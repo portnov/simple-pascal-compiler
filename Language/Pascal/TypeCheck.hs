@@ -43,6 +43,9 @@ typeOfA = typeOf . annotation
 symbolTypeC :: Annotate Symbol ann -> Type
 symbolTypeC = symbolType . content
 
+isFor (ForLoop _ _) = True
+isFor _             = False
+
 returnT ::  Type -> Annotate node1 SrcPos -> node -> Check (Annotate node TypeAnn)
 returnT t x res =
   return $ Annotate res $ TypeAnn {
@@ -182,6 +185,20 @@ instance Typed Statement where
             else failCheck $ "Invalid types in procedure call: " ++ show actualTypes ++ " instead of " ++ show formalArgTypes
       t -> failCheck $ "Symbol " ++ name ++ " is not a procedure, but " ++ show t
 
+  typeCheck s@(content -> Break) = do
+      setPos s
+      cxs <- gets contexts
+      if null (filter isFor cxs)
+        then failCheck "break statement not in for loop"
+        else returnT TVoid s Break
+
+  typeCheck s@(content -> Continue) = do
+      setPos s
+      cxs <- gets contexts
+      if null (filter isFor cxs)
+        then failCheck "continue statement not in for loop"
+        else returnT TVoid s Continue
+
   typeCheck s@(content -> Exit) = do
     setPos s
     cxs <- gets contexts
@@ -211,7 +228,7 @@ instance Typed Statement where
     b' <- mapM typeCheck b
     returnT TVoid s (IfThenElse c' a' b')
 
-  typeCheck s@(content -> For name start end body) = inContext (ForLoop 0) $ do
+  typeCheck s@(content -> For name start end body) = inContext (ForLoop name 0) $ do
     setPos s
     sym <- getSymbol name
     when (symbolType sym /= TInteger) $

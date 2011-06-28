@@ -51,8 +51,8 @@ getContextString = do
     cxs <- gets (map contextId . filter isProgramPart . currentContext)
     return $ intercalate "_" (reverse cxs)
   where
-    isProgramPart (ForLoop _) = False
-    isProgramPart _           = True
+    isProgramPart (ForLoop _ _) = False
+    isProgramPart _             = True
 
 setQuoteMode :: Bool -> Generate ()
 setQuoteMode b = do
@@ -93,9 +93,17 @@ forLoopLabel :: String -> String -> Generate String
 forLoopLabel src seed = do
   cxs <- gets currentContext
   case cxs of
-    []            -> failCheck "Internal error: forLoopLabel on empty context!"
-    (ForLoop _:_) -> return $ intercalate "_" (map contextId $ reverse cxs) ++ "_" ++ seed
-    _             -> failCheck $ src ++ " not in for loop"
+    []              -> failCheck "Internal error: forLoopLabel on empty context!"
+    (ForLoop _ _:_) -> return $ intercalate "_" (map contextId $ reverse cxs) ++ "_" ++ seed
+    _               -> failCheck $ src ++ " not in for loop"
+
+getForCounter :: Generate Id
+getForCounter = do
+  cxs <- gets currentContext
+  case cxs of
+    []              -> failCheck "Internal error: getForCounter on empty context!"
+    (ForLoop i _:_) -> return i
+    _               -> failCheck "Internal error: getForCounter not in for loop!"
 
 labelFrom :: String -> Generate String
 labelFrom seed = do
@@ -164,6 +172,21 @@ instance CodeGen (Statement :~ TypeAnn) where
     end <- getEndLabel
     i (GETMARK end)
     i GOTO
+  generate (content -> Break) = do
+    end <- forLoopLabel "break" "endFor"
+    i (GETMARK end)
+    i GOTO
+  generate (content -> Continue) = do
+    start <- forLoopLabel "continue" "forLoop"
+    var <- getFullName =<< getForCounter
+    i (CALL var)
+    i READ
+    push (1 :: Integer)
+    i ADD
+    i (CALL var)
+    i ASSIGN
+    i (GETMARK start)
+    i GOTO
   generate (content -> Exit) = do
     end <- getEndLabel
     i (GETMARK end)
@@ -182,12 +205,13 @@ instance CodeGen (Statement :~ TypeAnn) where
     putLabelHere endIfLabel
   generate (content -> For name start end body) = do
     n <- gets (length . cCode . generated)
-    inContext (ForLoop n) $ do
+    inContext (ForLoop name n) $ do
       generate start
       var <- getFullName name
       i (CALL var)
       i ASSIGN
-      loop <- label "forLoop"
+      loop <- forLoopLabel "for" "forLoop"
+      putLabelHere loop
       i (CALL var)
       i READ
       generate end

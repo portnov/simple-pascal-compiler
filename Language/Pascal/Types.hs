@@ -107,6 +107,8 @@ data Statement a =
     Assign Id (Expression :~ a)
   | Procedure Id [Expression :~ a]
   | Return (Expression :~ a)
+  | Break
+  | Continue
   | Exit
   | IfThenElse (Expression :~ a) [Statement :~ a] [Statement :~ a]
   | For Id (Expression :~ a) (Expression :~ a) [Statement :~ a]
@@ -116,6 +118,8 @@ deriving instance (Eq (Expression :~ a), Eq (Statement :~ a)) => Eq (Statement a
 instance (Show (Expression :~ a), Show (Statement :~ a)) => Show (Statement a) where
   show (Assign name expr) = name ++ " := " ++ show expr ++ ";"
   show (Procedure name args) = name ++ "(" ++ intercalate ", " (map show args) ++ ");"
+  show Break = "break;"
+  show Continue = "continue;"
   show Exit = "exit;"
   show (Return e) = "return " ++ show e ++ ";"
   show (IfThenElse c a b) = "if " ++ show c ++ " then " ++ show a ++ "else" ++ show b ++ ";"
@@ -204,7 +208,7 @@ data Context =
     Unknown
   | Outside
   | ProgramBody
-  | ForLoop Int
+  | ForLoop Id Int
   | InFunction Id Type
   deriving (Eq)
 
@@ -212,7 +216,7 @@ instance Show Context where
   show Unknown              = "unknown context"
   show Outside              = "outside program body"
   show ProgramBody          = "program body"
-  show (ForLoop _)          = "for loop"
+  show (ForLoop i _)        = "for loop with counter: " ++ i
   show (InFunction name TVoid) = "procedure " ++ name
   show (InFunction name tp) = printf "function %s(): %s" name (show tp)
 
@@ -220,7 +224,7 @@ contextId :: Context -> String
 contextId Unknown             = "unknown"
 contextId Outside             = "main"
 contextId ProgramBody         = "main"
-contextId (ForLoop n)         = "forLoop_at_" ++ show n
+contextId (ForLoop i n)       = "for_" ++ i ++ "_at_" ++ show n
 contextId (InFunction name _) = name
 
 data CheckState = CheckState {

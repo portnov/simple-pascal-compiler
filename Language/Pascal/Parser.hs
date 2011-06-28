@@ -16,7 +16,7 @@ pascal = P.makeTokenParser $ javaStyle {
            P.commentEnd = "*)",
            P.reservedNames = ["program", "function", "begin", "end", "var", "true", "false",
                              ":=", "return", "if", "then", "else", "for", "to", "do",
-                             "exit", "procedure"] }
+                             "exit", "procedure", "break", "continue"] }
 
 symbol = P.symbol pascal
 reserved = P.reserved pascal
@@ -116,6 +116,8 @@ pStatement =
       try pIfThenElse
   <|> try pAssign
   <|> try pProcedureCall
+  <|> try (withAnnotation (reserved "break" >> return Break))
+  <|> try (withAnnotation (reserved "continue" >> return Continue))
   <|> try (withAnnotation (reserved "exit" >> return Exit))
   <|> try pReturn
   <|> pFor

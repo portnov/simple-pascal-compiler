@@ -28,8 +28,12 @@ begin
   n := readInt();
   for i := j*2 to n do
     begin
+    if i = 14
+      then continue;
     hello(i);
     if i = 12
       then writeln("Dozen.");
+    if i = 16
+      then break;
     end;
 end.
