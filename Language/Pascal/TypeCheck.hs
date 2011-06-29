@@ -47,9 +47,6 @@ class Typed a where
 typeOfA ::  Annotate node TypeAnn -> Type
 typeOfA = typeOf . annotation
 
-symbolTypeC :: Annotate Symbol ann -> Type
-symbolTypeC = symbolType . content
-
 isFor :: Context -> Bool
 isFor (ForLoop _ _) = True
 isFor _             = False
@@ -170,17 +167,34 @@ makeSymbolTable xs = M.fromList $ map pair xs
        s { symbolDefLine = srcLine srcPos,
            symbolDefCol  = srcColumn srcPos })
 
-instance Typed Statement where
-  typeCheck x@(content -> Assign name expr) = do
-    setPos x
+instance Typed LValue where
+  typeCheck v@(content -> LVariable name) = do
+    setPos v
     sym <- getSymbol name
+    returnT (symbolType sym) v (LVariable name)
+  typeCheck v@(content -> LArray name ix) = do
+    setPos v
+    sym <- getSymbol name
+    case symbolType sym of
+      TArray _ tp -> do
+                     ix' <- typeCheck ix
+                     when (typeOfA ix' /= TInteger) $
+                       failCheck $ "Invalid assignment to array item: index is " ++ show (typeOfA ix') ++ ", not Integer"
+                     returnT tp v (LArray name ix')
+      x -> failCheck $ "Invalid assignment: " ++ name ++ " is " ++ show x ++ ", not Array"
+
+instance Typed Statement where
+  typeCheck x@(content -> Assign lvalue expr) = do
+    setPos x
+    lhs <- typeCheck lvalue
     rhs <- typeCheck expr
     let rhsType = typeOfA rhs
-    if symbolType sym == rhsType
+        lhsType = typeOfA lhs
+    if lhsType == rhsType
       then do
-           let result = Assign name rhs
+           let result = Assign lhs rhs
            returnT rhsType x result
-      else failCheck $ "Invalid assignment: LHS type is " ++ show (symbolType sym) ++ ", but RHS type is " ++ show rhsType
+      else failCheck $ "Invalid assignment: LHS type is " ++ show lhsType ++ ", but RHS type is " ++ show rhsType
 
   typeCheck s@(content -> Procedure name args) = do
     setPos s
@@ -272,6 +286,17 @@ instance Typed Expression where
     setPos e
     sym <- getSymbol x
     returnT (symbolType sym) e (Variable x)
+
+  typeCheck e@(content -> ArrayItem name ix) = do
+    setPos e
+    sym <- getSymbol name
+    case symbolType sym of
+      TArray _ tp -> do
+          ix' <- typeCheck ix
+          when (typeOfA ix' /= TInteger) $
+            failCheck $ "Array index is " ++ show (typeOfA ix') ++ ", not Integer"
+          returnT tp e (ArrayItem name ix')
+      x -> failCheck $ name ++ " is " ++ show x ++ ", not Array"
 
   typeCheck e@(content -> Literal x) = returnT (litType x) e (Literal x)
     where

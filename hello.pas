@@ -4,6 +4,7 @@ var
   i, j: integer;
   z: integer;
   n: integer;
+  arr: array [5] of integer;
 
 function odd(x: integer): boolean;
 begin
@@ -23,6 +24,8 @@ end;
 
 begin
   z := 1;
+  arr[z] := 25;
+  printInt(arr[z]+1); writeln("");
   j := 3 + z*2;
   write("Enter number: ");
   n := readInt();

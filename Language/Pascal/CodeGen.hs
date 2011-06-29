@@ -44,9 +44,6 @@ runCodeGen gen = generated $ execState go emptyGState
         Right result -> return result
         Left  err    -> fail $ "code generator: " ++ show err
 
-symbolNameC :: Annotate Symbol ann -> Id
-symbolNameC = symbolName . content
-
 -- | Get full name of current context
 getContextString :: Generate String
 getContextString = do
@@ -165,6 +162,12 @@ instance CodeGen (Expression TypeAnn) where
   generate (Variable name) =
     readFrom =<< getFullName name
 
+  generate (ArrayItem name ix) = do
+    arr <- getFullName name
+    i (CALL arr)
+    generate ix
+    i READ_ARRAY
+
   generate (Literal x) =
     case x of
       LInteger n -> push n
@@ -194,9 +197,16 @@ instance CodeGen (Expression TypeAnn) where
       IsNE -> i CMP >> i ABS
 
 instance CodeGen (Statement TypeAnn) where
-  generate (Assign name expr) = do
+  generate (Assign (content -> LVariable name) expr) = do
     generate expr
     assignTo =<< getFullName name
+
+  generate (Assign (content -> LArray name ix) expr) = do
+    generate expr
+    arr <- getFullName name
+    i (CALL arr)
+    generate ix
+    i ASSIGN_ARRAY
 
   generate (Procedure name args) = do
     generate args
@@ -269,19 +279,24 @@ instance CodeGen (Program TypeAnn) where
   generate (Program {..}) = do
       inContext Outside $ do
           -- declare global variables
-          forM progVariables $ \v ->
+          forM progVariables $ \v -> do
             declare (symbolNameC v)
+            allocIfArray (symbolNameC v) (symbolTypeC v)
           -- for all functions, declare their local variables
           -- and arguments
           forM progFunctions $ \fn -> do
             forM (fnFormalArgs $ content fn) $ \a -> do
               i COLON
-              push $ (fnName $ content fn) ++ "_" ++ symbolNameC a
+              let name = (fnName $ content fn) ++ "_" ++ symbolNameC a
+              push name 
               i VARIABLE
+              allocIfArray' name (symbolTypeC a)
             forM (fnVars $ content fn) $ \v -> do
               i COLON
-              push $ (fnName $ content fn) ++ "_" ++ symbolNameC v
+              let name = (fnName $ content fn) ++ "_" ++ symbolNameC v
+              push name 
               i VARIABLE
+              allocIfArray' name (symbolTypeC v)
       -- generate functions
       generate progFunctions
       vars <- gets variables
@@ -296,6 +311,18 @@ instance CodeGen (Program TypeAnn) where
         i COLON
         push =<< getFullName name
         i VARIABLE
+
+      allocIfArray' fullName tp =
+        case tp of
+          TArray sz _ -> do
+                         push sz
+                         i (CALL fullName)
+                         i ARRAY
+          _ -> return ()
+
+      allocIfArray name tp = do
+        fullName <- getFullName name
+        allocIfArray' fullName tp
 
 instance CodeGen (Function TypeAnn) where
   generate (Function {..}) = do

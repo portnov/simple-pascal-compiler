@@ -1,6 +1,7 @@
 {-# LANGUAGE RecordWildCards, TypeOperators, StandaloneDeriving, FlexibleContexts, UndecidableInstances #-}
 module Language.Pascal.Parser (parseSource, pProgram) where
 
+import Control.Applicative ((<$>))
 import Data.Char
 import Text.Parsec
 import qualified Text.Parsec.Token as P
@@ -15,18 +16,21 @@ pascal = P.makeTokenParser $ javaStyle {
            P.commentStart = "(*",
            P.commentEnd = "*)",
            P.reservedNames = ["program", "function", "begin", "end", "var", "true", "false",
-                             ":=", "return", "if", "then", "else", "for", "to", "do",
-                             "exit", "procedure", "break", "continue"] }
+                             ":=", "return", "if", "then", "else", "for", "to", "do", "of",
+                             "exit", "procedure", "break", "continue", "array"] }
 
 symbol = P.symbol pascal
 reserved = P.reserved pascal
 reservedOp = P.reservedOp pascal
 identifier = P.identifier pascal
+stringLiteral = P.stringLiteral pascal
+integer = P.integer pascal
 semi = P.semi pascal
 colon = P.colon pascal
 comma = P.comma pascal
 dot = P.dot pascal
 parens = P.parens pascal
+brackets = P.brackets pascal
 
 withAnnotation :: Parser x -> Parser (Annotate x SrcPos)
 withAnnotation p = do
@@ -68,20 +72,33 @@ pVarsList = do
     pos <- getPosition
     names <- identifier `sepBy` comma
     colon
-    tp <- identifier
+    tp <- pType
     return $ map (ret tp pos) names
   where
-    ret tp pos name = Annotate (name # readType tp) $
+    ret tp pos name = Annotate (name # content tp) $
       SrcPos {
         srcLine = sourceLine pos,
         srcColumn = sourceColumn pos }
+
+pType :: Parser (Annotate Type SrcPos)
+pType = try arrayType <|> simpleType
+  where
+    arrayType = withAnnotation $ do
+      reserved "array"
+      sz <- brackets integer
+      reserved "of"
+      tp <- pType
+      return (TArray sz $ content tp)
+    simpleType = withAnnotation $ do
+      name <- identifier
+      return (readType name)
 
 pNameType :: Parser (Annotate Symbol SrcPos)
 pNameType = withAnnotation $ do
   name <- identifier
   colon
-  tp <- identifier
-  return $ name # readType tp
+  tp <- pType
+  return $ name # content tp
 
 pFunction :: Parser (Function :~ SrcPos)
 pFunction = withAnnotation $ do
@@ -124,10 +141,19 @@ pStatement =
 
 pAssign :: Parser (Statement :~ SrcPos)
 pAssign = withAnnotation $ do
-  var <- identifier
+  lv <- pLValue
   symbol ":="
   expr <- pExpression
-  return $ Assign var expr
+  return $ Assign lv expr
+
+pLValue :: Parser (LValue :~ SrcPos)
+pLValue = try arrayItem <|> variable
+  where
+    arrayItem = withAnnotation $ do
+      arr <- identifier
+      ix <- brackets pExpression
+      return (LArray arr ix)
+    variable = withAnnotation (LVariable <$> identifier)
 
 pProcedureCall = withAnnotation $ do
   name <- identifier
@@ -151,7 +177,7 @@ pIfThenElse = withAnnotation $ do
           pBlock
   return $ IfThenElse cond ok el
 
-pBlock = try (one `fmap` pStatement) <|> do
+pBlock = try (one <$> pStatement) <|> do
            reserved "begin"
            sts <- pStatement `sepEndBy1` semi
            reserved "end"
@@ -189,17 +215,25 @@ pExpression = buildExpressionParser table term <?> "expression"
         srcColumn = sourceColumn pos }
 
 term = parens pExpression
-   <|> try (withAnnotation $ Literal `fmap` pLiteral)
+   <|> try (withAnnotation $ Literal <$> pLiteral)
    <|> try pCall
+   <|> try pArrayItem
    <|> pVariable
 
 pLiteral = try stringLit <|> try intLit <|> boolLit
   where
-    stringLit = LString `fmap` P.stringLiteral pascal
-    intLit = LInteger `fmap` P.integer pascal 
+    stringLit = LString <$> stringLiteral
+    intLit = LInteger <$> integer
     boolLit = try (reserved "true" >> return (LBool True)) <|> (reserved "false" >> return (LBool False))
 
-pVariable = withAnnotation $  Variable `fmap` identifier
+pVariable :: Parser (Expression :~ SrcPos)
+pVariable = withAnnotation $  Variable <$> identifier
+
+pArrayItem :: Parser (Expression :~ SrcPos)
+pArrayItem = withAnnotation $ do
+  arr <- identifier
+  ix <- brackets pExpression
+  return (ArrayItem arr ix)
 
 pCall :: Parser (Expression :~ SrcPos)
 pCall = withAnnotation $ do

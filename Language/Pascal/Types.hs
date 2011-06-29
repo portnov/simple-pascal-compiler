@@ -57,9 +57,7 @@ data Program a = Program {
   progFunctions :: [Function :~ a],     -- ^ functions
   progBody :: [Statement :~ a]          -- ^ program body statements
   }        
-
-deriving instance (Show a, Show (Function :~ a), Show (Statement :~ a)) => Show (Program a)
-deriving instance (Eq a, Eq (Function :~ a), Eq (Statement :~ a)) => Eq (Program a)
+  deriving (Eq, Show)
 
 -- | Function (or procedure)
 data Function a = Function {
@@ -69,9 +67,7 @@ data Function a = Function {
   fnVars :: [Annotate Symbol a],       -- ^ local variables
   fnBody :: [Statement :~ a]           -- ^ function body statements
   }
-
-deriving instance (Show a, Show (Function :~ a), Show (Statement :~ a)) => Show (Function a)
-deriving instance (Eq a, Eq (Function :~ a), Eq (Statement :~ a)) => Eq (Function a)
+  deriving (Eq, Show)
 
 -- | Symbol table
 type SymbolTable = [M.Map Id Symbol]
@@ -93,6 +89,12 @@ showSymbol (Symbol {..}) =
   printf "%s: %s (defined at l.%d, c.%d)"
          symbolName (show symbolType) symbolDefLine symbolDefCol
 
+symbolNameC :: Annotate Symbol ann -> Id
+symbolNameC = symbolName . content
+
+symbolTypeC :: Annotate Symbol ann -> Type
+symbolTypeC = symbolType . content
+
 -- | Make symbol from it's name and type
 (#) :: Id -> Type -> Symbol
 name # tp = Symbol {
@@ -107,6 +109,7 @@ data Type =
   | TString
   | TBool
   | TVoid
+  | TArray Integer Type   -- ^ array of some type
   | TFunction [Type] Type -- ^ formal arguments types and return type
   deriving (Eq)
 
@@ -115,14 +118,25 @@ instance Show Type where
   show TString  = "string"
   show TBool    = "boolean"
   show TVoid    = "void"
+  show (TArray sz t) = printf "array [%d] of %s" sz (show t)
   show (TFunction args TVoid) =
     "procedure (" ++ intercalate ", " (map show args) ++ ")"
   show (TFunction args res) =
     "function (" ++ intercalate ", " (map show args) ++ "): " ++ show res
 
+-- | Assignment LHS value: variable or array item
+data LValue a =
+    LVariable Id
+  | LArray Id (Expression :~ a)
+  deriving (Eq)
+
+instance Show (LValue a) where
+  show (LVariable n) = n
+  show (LArray a i) = printf "%s[%s]" a (show i)
+
 -- | Program statements
 data Statement a =
-    Assign Id (Expression :~ a)                                    -- ^ variable := expression;
+    Assign (LValue :~ a) (Expression :~ a)                         -- ^ lvalue := expression;
   | Procedure Id [Expression :~ a]                                 -- ^ procedureName(arguments);
   | Return (Expression :~ a)                                       -- ^ return expression;
   | Break                                                          -- ^ break (for loop)
@@ -130,11 +144,10 @@ data Statement a =
   | Exit                                                           -- ^ exit (procedure or program)
   | IfThenElse (Expression :~ a) [Statement :~ a] [Statement :~ a] -- ^ if expression then ... else ...
   | For Id (Expression :~ a) (Expression :~ a) [Statement :~ a]    -- ^ for i := start to end do ...
-
-deriving instance (Eq (Expression :~ a), Eq (Statement :~ a)) => Eq (Statement a)
+  deriving (Eq)
 
 instance (Show (Expression :~ a), Show (Statement :~ a)) => Show (Statement a) where
-  show (Assign name expr) = name ++ " := " ++ show expr ++ ";"
+  show (Assign lvalue expr) = show lvalue ++ " := " ++ show expr ++ ";"
   show (Procedure name args) = name ++ "(" ++ intercalate ", " (map show args) ++ ");"
   show Break = "break;"
   show Continue = "continue;"
@@ -158,11 +171,11 @@ instance Show Lit where
 -- | Expressions
 data Expression a =
     Variable Id                                  -- ^ named variable value
+  | ArrayItem Id (Expression :~ a)               -- ^ array item
   | Literal Lit                                  -- ^ literal value
   | Call Id [Expression :~ a]                    -- ^ functionName(arguments)
   | Op BinOp (Expression :~ a) (Expression :~ a) -- ^ binary operation (x+y etc)
-
-deriving instance (Eq (Expression :~ a)) => Eq (Expression a)
+  deriving (Eq)
 
 instance (Show (Expression :~ a)) => Show (Expression a) where
    show (Variable x) = x
