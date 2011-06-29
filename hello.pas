@@ -25,7 +25,7 @@ end;
 begin
   z := 1;
   arr[z] := 25;
-  printInt(arr[z]+1); writeln("");
+  printInt(arr[z]-1); writeln("");
   j := 3 + z*2;
   write("Enter number: ");
   n := readInt();

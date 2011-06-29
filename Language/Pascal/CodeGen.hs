@@ -181,9 +181,8 @@ instance CodeGen (Expression TypeAnn) where
       Nothing   -> i (CALL name)
 
   generate (Op op x y) = do
-    case op of
-      Mod -> generate x >> generate y
-      _   -> generate y >> generate x
+    generate x
+    generate y
     case op of
       Add -> i ADD
       Sub -> i SUB
