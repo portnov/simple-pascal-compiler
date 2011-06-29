@@ -1,4 +1,4 @@
-GHC=ghc -fwarn-unused-imports --make
+GHC=ghc -fwarn-unused-imports -fwarn-incomplete-patterns --make
 
 all: spc
 

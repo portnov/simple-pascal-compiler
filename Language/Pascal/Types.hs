@@ -161,7 +161,7 @@ data Statement a =
   | For Id (Expression :~ a) (Expression :~ a) [Statement :~ a]    -- ^ for i := start to end do ...
   deriving (Eq)
 
-instance (Show (Expression :~ a), Show (Statement :~ a)) => Show (Statement a) where
+instance Show (Statement a) where
   show (Assign lvalue expr) = show lvalue ++ " := " ++ show expr ++ ";"
   show (Procedure name args) = name ++ "(" ++ intercalate ", " (map show args) ++ ");"
   show Break = "break;"
@@ -192,8 +192,9 @@ data Expression a =
   | Op BinOp (Expression :~ a) (Expression :~ a) -- ^ binary operation (x+y etc)
   deriving (Eq)
 
-instance (Show (Expression :~ a)) => Show (Expression a) where
+instance Show (Expression a) where
    show (Variable x) = x
+   show (ArrayItem name ix) = printf "%s[%s]" name (show ix)
    show (Literal x)  = show x
    show (Call name args) = name ++ "(" ++ intercalate ", " (map show args) ++ ")"
    show (Op op x y) = "(" ++ show x ++ " " ++ show op ++ " " ++ show y ++ ")"
