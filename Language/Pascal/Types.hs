@@ -109,15 +109,30 @@ data Type =
   | TString
   | TBool
   | TVoid
+  | TAny                  -- ^ any value (dynamic typing)
   | TArray Integer Type   -- ^ array of some type
   | TFunction [Type] Type -- ^ formal arguments types and return type
   deriving (Eq)
+
+isSubtypeOf :: Type -> Type -> Bool
+isSubtypeOf TVoid TVoid = True
+isSubtypeOf TVoid _ = False
+isSubtypeOf _ TAny = True
+isSubtypeOf (TArray _ t1) (TArray _ t2) = t1 `isSubtypeOf` t2
+isSubtypeOf (TFunction a1 r1) (TFunction a2 r2) =
+  (r1 `isSubtypeOf` r2) && areSubtypesOf a1 a2
+isSubtypeOf t1 t2 = t1 == t2
+
+areSubtypesOf :: [Type] -> [Type] -> Bool
+areSubtypesOf ts1 ts2 =
+  (length ts1 == length ts2) && and (zipWith isSubtypeOf ts1 ts2)
 
 instance Show Type where
   show TInteger = "integer"
   show TString  = "string"
   show TBool    = "boolean"
   show TVoid    = "void"
+  show TAny     = "any"
   show (TArray sz t) = printf "array [%d] of %s" sz (show t)
   show (TFunction args TVoid) =
     "procedure (" ++ intercalate ", " (map show args) ++ ")"

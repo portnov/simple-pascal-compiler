@@ -14,7 +14,7 @@ end;
 procedure hello(a: integer);
 begin
   writeln("Hello!");
-  printInt(a);
+  write(a);
   if a = 11
     then exit;
   if odd(a)
@@ -25,10 +25,10 @@ end;
 begin
   z := 1;
   arr[z] := 25;
-  printInt(arr[z]-1); writeln("");
+  writeln(arr);
   j := 3 + z*2;
   write("Enter number: ");
-  n := readInt();
+  n := readln();
   for i := j*2 to n do
     begin
     if i = 14

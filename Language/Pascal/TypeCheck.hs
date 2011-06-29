@@ -190,10 +190,10 @@ instance Typed Statement where
     rhs <- typeCheck expr
     let rhsType = typeOfA rhs
         lhsType = typeOfA lhs
-    if lhsType == rhsType
+    if (rhsType == TAny) || (rhsType `isSubtypeOf` lhsType)
       then do
            let result = Assign lhs rhs
-           returnT rhsType x result
+           returnT lhsType x result
       else failCheck $ "Invalid assignment: LHS type is " ++ show lhsType ++ ", but RHS type is " ++ show rhsType
 
   typeCheck s@(content -> Procedure name args) = do
@@ -203,7 +203,7 @@ instance Typed Statement where
       TFunction formalArgTypes TVoid -> do
           args' <- mapM typeCheck args
           let actualTypes = map typeOfA args'
-          if actualTypes == formalArgTypes
+          if actualTypes `areSubtypesOf` formalArgTypes
             then returnT TVoid s (Procedure name args')
             else failCheck $ "Invalid types in procedure call: " ++ show actualTypes ++ " instead of " ++ show formalArgTypes
       t -> failCheck $ "Symbol " ++ name ++ " is not a procedure, but " ++ show t
@@ -238,7 +238,7 @@ instance Typed Statement where
     case cxs of
       (InFunction _ TVoid:_) -> failCheck "return statement in procedure"
       (InFunction _ t:_)
-          | t == retType -> returnT (typeOfA x') s (Return x')
+          | retType `isSubtypeOf` t -> returnT (typeOfA x') s (Return x')
           | otherwise    -> failCheck $ "Return value type does not match: expecting " ++ show t ++ ", got " ++ show retType
       _                  -> failCheck $ "return statement not in function"
 
@@ -311,7 +311,7 @@ instance Typed Expression where
       TFunction formalArgTypes resType -> do
           args' <- mapM typeCheck args
           let actualTypes = map typeOfA args'
-          if actualTypes == formalArgTypes
+          if actualTypes `areSubtypesOf` formalArgTypes
             then returnT resType e (Call name args')
             else failCheck $ "Invalid types in function call: " ++ show actualTypes ++ " instead of " ++ show formalArgTypes
       t -> failCheck $ "Symbol " ++ name ++ " is not a function, but " ++ show t

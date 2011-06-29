@@ -34,11 +34,9 @@ push x = i (PUSH $ toStack x)
 -- | List of builtin functions
 builtinFunctions :: [(Id, Type, Generate ())]
 builtinFunctions =
- [("write",   TFunction [TString] TVoid, write),
-  ("writeln", TFunction [TString] TVoid, writeln),
-  ("printInt", TFunction [TInteger] TVoid, write),
-  ("readln",  TFunction [] TString,      readln),
-  ("readInt", TFunction [] TInteger,     readln) ]
+ [("write",   TFunction [TAny] TVoid, write),
+  ("writeln", TFunction [TAny] TVoid, writeln),
+  ("readln",  TFunction []     TAny,  readln) ]
 
 -- | If named symbol is builtin, return it's definition
 lookupBuiltin :: Id -> Maybe (Generate ())
