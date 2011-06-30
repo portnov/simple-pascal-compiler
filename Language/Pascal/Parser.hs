@@ -17,7 +17,7 @@ pascal = P.makeTokenParser $ javaStyle {
            P.commentEnd = "*)",
            P.reservedNames = ["program", "function", "begin", "end", "var", "true", "false",
                              ":=", "return", "if", "then", "else", "for", "to", "do", "of",
-                             "exit", "procedure", "break", "continue", "array"] }
+                             "exit", "procedure", "break", "continue", "array", "record" ] }
 
 symbol = P.symbol pascal
 reserved = P.reserved pascal
@@ -81,7 +81,7 @@ pVarsList = do
         srcColumn = sourceColumn pos }
 
 pType :: Parser (Annotate Type SrcPos)
-pType = try arrayType <|> simpleType
+pType = try arrayType <|> try recordType <|> simpleType
   where
     arrayType = withAnnotation $ do
       reserved "array"
@@ -89,6 +89,19 @@ pType = try arrayType <|> simpleType
       reserved "of"
       tp <- pType
       return (TArray sz $ content tp)
+
+    recordType = withAnnotation $ do
+      reserved "record"
+      fields <- field `sepEndBy1` semi
+      reserved "end"
+      return (TRecord fields)
+
+    field = do
+      name <- identifier
+      colon
+      tp <- pType
+      return (name, content tp)
+
     simpleType = withAnnotation $ do
       name <- identifier
       return (readType name)
@@ -147,13 +160,20 @@ pAssign = withAnnotation $ do
   return $ Assign lv expr
 
 pLValue :: Parser (LValue :~ SrcPos)
-pLValue = try arrayItem <|> variable
+pLValue = try arrayItem <|> try recordField <|> variable
   where
     arrayItem = withAnnotation $ do
       arr <- identifier
       ix <- brackets pExpression
       return (LArray arr ix)
+
     variable = withAnnotation (LVariable <$> identifier)
+
+    recordField = withAnnotation $ do
+      base <- identifier
+      dot
+      field <- identifier
+      return (LField base field)
 
 pProcedureCall = withAnnotation $ do
   name <- identifier
@@ -218,6 +238,7 @@ term = parens pExpression
    <|> try (withAnnotation $ Literal <$> pLiteral)
    <|> try pCall
    <|> try pArrayItem
+   <|> try pRecordField
    <|> pVariable
 
 pLiteral = try stringLit <|> try intLit <|> boolLit
@@ -234,6 +255,13 @@ pArrayItem = withAnnotation $ do
   arr <- identifier
   ix <- brackets pExpression
   return (ArrayItem arr ix)
+
+pRecordField :: Parser (Expression :~ SrcPos)
+pRecordField = withAnnotation $ do
+  base <- identifier
+  dot
+  field <- identifier
+  return (RecordField base field)
 
 pCall :: Parser (Expression :~ SrcPos)
 pCall = withAnnotation $ do

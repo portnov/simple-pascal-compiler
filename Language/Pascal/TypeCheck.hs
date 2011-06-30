@@ -44,9 +44,6 @@ emptyState = CheckState {
 class Typed a where
   typeCheck :: a :~ SrcPos -> Check (a :~ TypeAnn)
 
-typeOfA ::  Annotate node TypeAnn -> Type
-typeOfA = typeOf . annotation
-
 isFor :: Context -> Bool
 isFor (ForLoop _ _) = True
 isFor _             = False
@@ -133,9 +130,7 @@ instance Typed Program where
   typeCheck p@(content -> Program vars fns body) = withSymbolTable $ do
       setPos p
       (vars', fns') <- inContext Outside $ do
-          vs <- forM vars $ \v -> do
-                   addSymbol v
-                   return $ v `withType` symbolTypeC v
+          vs <- forM vars checkSymbol
 
           fs <- forM fns $ \fn -> do
                   fn' <- typeCheck fn
@@ -167,11 +162,20 @@ makeSymbolTable xs = M.fromList $ map pair xs
        s { symbolDefLine = srcLine srcPos,
            symbolDefCol  = srcColumn srcPos })
 
+findField :: Id -> [(Id, Type)] -> Maybe (Int, Type)
+findField name pairs = go 1 pairs
+  where
+    go _ [] = Nothing
+    go i ((k,v):other)
+         | k == name = Just (i, v)
+         | otherwise = go (i+1) other
+
 instance Typed LValue where
   typeCheck v@(content -> LVariable name) = do
     setPos v
     sym <- getSymbol name
     returnT (symbolType sym) v (LVariable name)
+
   typeCheck v@(content -> LArray name ix) = do
     setPos v
     sym <- getSymbol name
@@ -179,9 +183,18 @@ instance Typed LValue where
       TArray _ tp -> do
                      ix' <- typeCheck ix
                      when (typeOfA ix' /= TInteger) $
-                       failCheck $ "Invalid assignment to array item: index is " ++ show (typeOfA ix') ++ ", not Integer"
+                       failCheck $ "Invalid array item lvalue: index is " ++ show (typeOfA ix') ++ ", not Integer"
                      returnT tp v (LArray name ix')
-      x -> failCheck $ "Invalid assignment: " ++ name ++ " is " ++ show x ++ ", not Array"
+      x -> failCheck $ "Invalid lvalue: " ++ name ++ " is " ++ show x ++ ", not Array"
+
+  typeCheck v@(content -> LField base field) = do
+    setPos v
+    baseSym <- getSymbol base
+    case symbolType baseSym of
+      TRecord pairs -> case findField field pairs of
+                         Just (ix,t) -> returnT (TField ix t) v (LField base field)
+                         Nothing -> failCheck $ "No such field in " ++ base ++ " record: " ++ field
+      x -> failCheck $ base ++ " is " ++ show x ++ ", not Record"
 
 instance Typed Statement where
   typeCheck x@(content -> Assign lvalue expr) = do
@@ -239,8 +252,8 @@ instance Typed Statement where
       (InFunction _ TVoid:_) -> failCheck "return statement in procedure"
       (InFunction _ t:_)
           | retType `isSubtypeOf` t -> returnT (typeOfA x') s (Return x')
-          | otherwise    -> failCheck $ "Return value type does not match: expecting " ++ show t ++ ", got " ++ show retType
-      _                  -> failCheck $ "return statement not in function"
+          | otherwise -> failCheck $ "Return value type does not match: expecting " ++ show t ++ ", got " ++ show retType
+      _               -> failCheck $ "return statement not in function"
 
   typeCheck s@(content -> IfThenElse c a b) = do
     setPos s
@@ -265,21 +278,32 @@ instance Typed Statement where
     body' <- mapM typeCheck body
     returnT TVoid s (For name start' end' body')
 
+checkType :: Type -> Check Type
+checkType rec@(TRecord pairs) = withSymbolTable $ do
+    forM pairs $ \(n,t) -> do
+      t' <- checkType t
+      addSymbol $ Annotate (n # t') (SrcPos 0 0)
+    return rec
+checkType t = return t
+
+checkSymbol :: Annotate Symbol SrcPos -> Check (Annotate Symbol TypeAnn)
+checkSymbol s = do
+  setPos s
+  t <- checkType (symbolTypeC s)
+  addSymbol s
+  return $ s `withType` t
+
 instance Typed Function where
   typeCheck x@(content -> Function {..}) = do
-      setPos x
-      inContext (InFunction fnName fnResultType) $ withSymbolTable $ do
-          args <- mapM varType fnFormalArgs
-          vars <- mapM varType fnVars
-          body <- mapM typeCheck fnBody
-          let fn = Function fnName args fnResultType vars body
-              tp = TFunction (map typeOfA args) fnResultType
-          Annotate result ta <- returnT fnResultType x fn
-          return $ Annotate result $ ta {localSymbols = makeSymbolTable vars}
-    where
-      varType v = do
-        addSymbol v
-        return $ v `withType` symbolTypeC v
+    setPos x
+    inContext (InFunction fnName fnResultType) $ withSymbolTable $ do
+        args <- mapM checkSymbol fnFormalArgs
+        vars <- mapM checkSymbol fnVars
+        body <- mapM typeCheck fnBody
+        let fn = Function fnName args fnResultType vars body
+            tp = TFunction (map typeOfA args) fnResultType
+        Annotate result ta <- returnT fnResultType x fn
+        return $ Annotate result $ ta {localSymbols = makeSymbolTable vars}
 
 instance Typed Expression where
   typeCheck e@(content -> Variable x) = do
@@ -297,6 +321,16 @@ instance Typed Expression where
             failCheck $ "Array index is " ++ show (typeOfA ix') ++ ", not Integer"
           returnT tp e (ArrayItem name ix')
       x -> failCheck $ name ++ " is " ++ show x ++ ", not Array"
+
+  typeCheck e@(content -> RecordField base field) = do
+    setPos e
+    baseSym <- getSymbol base
+    case symbolType baseSym of
+      TRecord pairs -> case findField field pairs of
+                         Just (ix,t) -> returnT (TField ix t) e (RecordField base field)
+                         Nothing -> failCheck $ "No such field in " ++ base ++ " record: " ++ field
+      TField ix t -> returnT (TField ix t) e (RecordField base field)
+      x -> failCheck $ base ++ " is " ++ show x ++ ", not Record"
 
   typeCheck e@(content -> Literal x) = returnT (litType x) e (Literal x)
     where
@@ -320,11 +354,13 @@ instance Typed Expression where
     setPos e
     x' <- typeCheck x
     y' <- typeCheck y
-    case (typeOfA x', typeOfA y') of
-      (TInteger, TInteger)
-        | op `elem` [IsEQ, IsNE, IsGT, IsLT] -> returnT TBool    e (Op op x' y')
-        | otherwise                          -> returnT TInteger e (Op op x' y')
-      _ -> failCheck $ "Invalid operand types!"
+    let tx = typeOfA x'
+        ty = typeOfA y'
+    if (TInteger `isSubtypeOf` tx) && (TInteger `isSubtypeOf` ty)
+      then if op `elem` [IsEQ, IsNE, IsGT, IsLT]
+             then returnT TBool    e (Op op x' y')
+             else returnT TInteger e (Op op x' y')
+      else failCheck $ "Invalid operand types: " ++ show tx ++ ", " ++ show ty
 
 checkTypes :: Program :~ SrcPos -> Program :~ TypeAnn
 checkTypes prog = evalState check emptyState

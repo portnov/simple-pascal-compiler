@@ -95,6 +95,9 @@ symbolNameC = symbolName . content
 symbolTypeC :: Annotate Symbol ann -> Type
 symbolTypeC = symbolType . content
 
+typeOfA ::  Annotate node TypeAnn -> Type
+typeOfA = typeOf . annotation
+
 -- | Make symbol from it's name and type
 (#) :: Id -> Type -> Symbol
 name # tp = Symbol {
@@ -111,6 +114,8 @@ data Type =
   | TVoid
   | TAny                  -- ^ any value (dynamic typing)
   | TArray Integer Type   -- ^ array of some type
+  | TRecord [(Id, Type)]  -- ^ record
+  | TField Int Type       -- ^ record field: field index and type
   | TFunction [Type] Type -- ^ formal arguments types and return type
   deriving (Eq)
 
@@ -119,6 +124,8 @@ isSubtypeOf TVoid TVoid = True
 isSubtypeOf TVoid _ = False
 isSubtypeOf _ TAny = True
 isSubtypeOf (TArray _ t1) (TArray _ t2) = t1 `isSubtypeOf` t2
+isSubtypeOf t1 (TField _ t2) = t1 `isSubtypeOf` t2
+isSubtypeOf (TField _ t1) t2 = t1 `isSubtypeOf` t2
 isSubtypeOf (TFunction a1 r1) (TFunction a2 r2) =
   (r1 `isSubtypeOf` r2) && areSubtypesOf a1 a2
 isSubtypeOf t1 t2 = t1 == t2
@@ -134,6 +141,10 @@ instance Show Type where
   show TVoid    = "void"
   show TAny     = "any"
   show (TArray sz t) = printf "array [%d] of %s" sz (show t)
+  show (TRecord pairs) = "record " ++ intercalate ", " (map s pairs) ++ " end"
+    where
+      s (i,t) = i ++ ": " ++ show t
+  show (TField _ t) = "record field of type " ++ show t
   show (TFunction args TVoid) =
     "procedure (" ++ intercalate ", " (map show args) ++ ")"
   show (TFunction args res) =
@@ -143,11 +154,13 @@ instance Show Type where
 data LValue a =
     LVariable Id
   | LArray Id (Expression :~ a)
+  | LField Id Id
   deriving (Eq)
 
 instance Show (LValue a) where
   show (LVariable n) = n
   show (LArray a i) = printf "%s[%s]" a (show i)
+  show (LField r f) = r ++ "." ++ f
 
 -- | Program statements
 data Statement a =
@@ -187,6 +200,7 @@ instance Show Lit where
 data Expression a =
     Variable Id                                  -- ^ named variable value
   | ArrayItem Id (Expression :~ a)               -- ^ array item
+  | RecordField Id Id                            -- ^ record field
   | Literal Lit                                  -- ^ literal value
   | Call Id [Expression :~ a]                    -- ^ functionName(arguments)
   | Op BinOp (Expression :~ a) (Expression :~ a) -- ^ binary operation (x+y etc)
@@ -195,6 +209,7 @@ data Expression a =
 instance Show (Expression a) where
    show (Variable x) = x
    show (ArrayItem name ix) = printf "%s[%s]" name (show ix)
+   show (RecordField name field) = name ++ "." ++ field
    show (Literal x)  = show x
    show (Call name args) = name ++ "(" ++ intercalate ", " (map show args) ++ ")"
    show (Op op x y) = "(" ++ show x ++ " " ++ show op ++ " " ++ show y ++ ")"

@@ -1,10 +1,10 @@
-{-# LANGUAGE TypeSynonymInstances, TypeOperators, ViewPatterns, FlexibleInstances, RecordWildCards, FlexibleContexts #-}
+{-# LANGUAGE TypeSynonymInstances, TypeOperators, ViewPatterns, FlexibleInstances, RecordWildCards, FlexibleContexts, OverlappingInstances #-}
 module Language.Pascal.CodeGen (runCodeGen, CodeGen (..)) where
 
 import Control.Monad
 import Control.Monad.State
 import Control.Monad.Error
-import Data.List (intercalate)
+import Data.List (intercalate, findIndex)
 import qualified Data.Map as M
 
 import Language.SSVM.Types
@@ -149,6 +149,10 @@ readFrom name = do
   i (CALL name)
   i READ
 
+findFieldIndex :: Id -> [(Id, Type)] -> Maybe Int
+findFieldIndex name pairs =
+  (1+) `fmap` findIndex (\p -> fst p == name) pairs
+
 class CodeGen a where
   generate :: a -> Generate ()
 
@@ -157,6 +161,24 @@ instance (CodeGen (a TypeAnn)) => CodeGen (a :~ TypeAnn) where
 
 instance (CodeGen a) => CodeGen [a] where
   generate list = forM_ list generate
+
+instance CodeGen (Expression :~ TypeAnn) where
+  generate e@(content -> RecordField base field) = do
+    rec <- getFullName base
+    case typeOfA e of
+      TRecord pairs -> case findFieldIndex field pairs of
+                         Just ix -> do
+                           i (CALL rec)
+                           push ix
+                           i READ_ARRAY
+                         Nothing -> failCheck $ "Internal error: no such field in " ++ base ++ " record: " ++ field
+      TField ix _ -> do
+          i (CALL rec)
+          push ix
+          i READ_ARRAY
+      x -> failCheck $ "Internal error: " ++ base ++ " is " ++ show x ++ ", not a Record"
+
+  generate e = generate (content e)
 
 instance CodeGen (Expression TypeAnn) where
   generate (Variable name) =
@@ -167,6 +189,9 @@ instance CodeGen (Expression TypeAnn) where
     i (CALL arr)
     generate ix
     i READ_ARRAY
+
+  generate (RecordField _ _) =
+    failCheck "Internal error: RecordField in instance CodeGen (Expression TypeAnn)"
 
   generate (Literal x) =
     case x of
@@ -195,17 +220,35 @@ instance CodeGen (Expression TypeAnn) where
       IsEQ -> i CMP >> i ABS >> push (1 :: Integer) >> i SUB
       IsNE -> i CMP >> i ABS
 
-instance CodeGen (Statement TypeAnn) where
-  generate (Assign (content -> LVariable name) expr) = do
-    generate expr
+instance CodeGen (LValue :~ TypeAnn) where
+  generate (content -> LVariable name) =
     assignTo =<< getFullName name
 
-  generate (Assign (content -> LArray name ix) expr) = do
-    generate expr
+  generate (content -> LArray name ix) = do
     arr <- getFullName name
     i (CALL arr)
     generate ix
     i ASSIGN_ARRAY
+
+  generate v@(content -> LField base field) = do
+    var <- getFullName base
+    case typeOfA v of
+      TRecord pairs -> case findFieldIndex field pairs of
+                         Just ix -> do
+                           i (CALL var)
+                           push ix
+                           i ASSIGN_ARRAY
+                         Nothing -> failCheck $ "Internal error: no such field in " ++ base ++ " record: " ++ field
+      TField ix _ -> do
+        i (CALL var)
+        push ix
+        i ASSIGN_ARRAY
+      x -> failCheck $ "Internal error: " ++ base ++ " is " ++ show x ++ ", not a Record"
+
+instance CodeGen (Statement TypeAnn) where
+  generate (Assign lvalue expr) = do
+    generate expr
+    generate lvalue
 
   generate (Procedure name args) = do
     generate args
@@ -280,7 +323,7 @@ instance CodeGen (Program TypeAnn) where
           -- declare global variables
           forM progVariables $ \v -> do
             declare (symbolNameC v)
-            allocIfArray (symbolNameC v) (symbolTypeC v)
+            allocIfNeeded (symbolNameC v) (symbolTypeC v)
           -- for all functions, declare their local variables
           -- and arguments
           forM progFunctions $ \fn -> do
@@ -289,13 +332,13 @@ instance CodeGen (Program TypeAnn) where
               let name = (fnName $ content fn) ++ "_" ++ symbolNameC a
               push name 
               i VARIABLE
-              allocIfArray' name (symbolTypeC a)
+              allocIfNeeded' name (symbolTypeC a)
             forM (fnVars $ content fn) $ \v -> do
               i COLON
               let name = (fnName $ content fn) ++ "_" ++ symbolNameC v
               push name 
               i VARIABLE
-              allocIfArray' name (symbolTypeC v)
+              allocIfNeeded' name (symbolTypeC v)
       -- generate functions
       generate progFunctions
       vars <- gets variables
@@ -311,17 +354,21 @@ instance CodeGen (Program TypeAnn) where
         push =<< getFullName name
         i VARIABLE
 
-      allocIfArray' fullName tp =
+      allocIfNeeded' fullName tp =
         case tp of
           TArray sz _ -> do
                          push sz
                          i (CALL fullName)
                          i ARRAY
+          TRecord pairs -> do
+                         push (length pairs)
+                         i (CALL fullName)
+                         i ARRAY
           _ -> return ()
 
-      allocIfArray name tp = do
+      allocIfNeeded name tp = do
         fullName <- getFullName name
-        allocIfArray' fullName tp
+        allocIfNeeded' fullName tp
 
 instance CodeGen (Function TypeAnn) where
   generate (Function {..}) = do

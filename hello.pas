@@ -5,6 +5,11 @@ var
   z: integer;
   n: integer;
   arr: array [5] of integer;
+  rec: record
+         int: integer;
+         str: string;
+         z: integer;
+       end;
 
 function odd(x: integer): boolean;
 begin
@@ -22,10 +27,21 @@ begin
     else writeln(" is even.");
 end;
 
+procedure test_laziness(x: integer, y: integer);
+begin
+  write("Test: ");
+  writeln(x);
+end;
+
 begin
   z := 1;
   arr[z] := 25;
+  arr[4] := z;
   writeln(arr);
+  rec.int := 1/0;
+  rec.z := 7;
+  rec.str := "test";
+  test_laziness(rec.z - 1, rec.int);
   j := 3 + z*2;
   write("Enter number: ");
   n := readln();
