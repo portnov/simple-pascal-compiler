@@ -2,7 +2,7 @@
 module Language.Pascal.Parser (parseSource, pProgram) where
 
 import Control.Applicative ((<$>))
-import Data.Char
+import qualified Data.Map as M
 import Text.Parsec
 import qualified Text.Parsec.Token as P
 import Text.Parsec.Language
@@ -17,7 +17,7 @@ pascal = P.makeTokenParser $ javaStyle {
            P.commentEnd = "*)",
            P.reservedNames = ["program", "function", "begin", "end", "var", "true", "false",
                              ":=", "return", "if", "then", "else", "for", "to", "do", "of",
-                             "exit", "procedure", "break", "continue", "array", "record" ] }
+                             "exit", "procedure", "break", "continue", "array", "record", "type" ] }
 
 symbol = P.symbol pascal
 reserved = P.reserved pascal
@@ -45,27 +45,38 @@ pProgram = withAnnotation $ do
   reserved "program"
   identifier
   semi
+  types <- M.fromList <$> option [] pTypes
   vars <- option [] pVars
   fns <- many (try pFunction <|> pProcedure)
   reserved "begin"
   sts <- pStatement `sepEndBy1` semi 
   reserved "end"
   dot
-  return $ Program vars fns sts
+  return $ Program types vars fns sts
 
 readType str =
-  case map toLower str of
+  case str of
     "integer" -> TInteger
     "string"  -> TString
     "boolean" -> TBool
     "void"    -> TVoid
-    s         -> error $ "Unknown type: " ++ s
+    s         -> TUser s
 
 pVars :: Parser [Annotate Symbol SrcPos]
 pVars = do
   reserved "var"
   lists <- pVarsList `sepEndBy1` semi 
   return $ concat lists
+
+pTypes :: Parser [(Id, Type)]
+pTypes = do
+  reserved "type"
+  many1 $ do
+    name <- identifier
+    reservedOp "="
+    tp <- pType
+    semi
+    return (name, content tp)
 
 pVarsList :: Parser [Annotate Symbol SrcPos]
 pVarsList = do

@@ -1,15 +1,21 @@
 program Hello;
 
+type
+  MyRecord =
+    record
+      int: integer;
+      str: string;
+      z: integer;
+    end;
+
+  MyArray = array [5] of integer;
+
 var
   i, j: integer;
   z: integer;
   n: integer;
-  arr: array [5] of integer;
-  rec: record
-         int: integer;
-         str: string;
-         z: integer;
-       end;
+  arr: MyArray;
+  rec: MyRecord;
 
 function odd(x: integer): boolean;
 begin

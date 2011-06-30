@@ -47,12 +47,16 @@ withType (Annotate x pos) t = Annotate x $ TypeAnn {
   typeOf   = t,
   localSymbols = M.empty}
 
+setType :: Annotate Symbol a -> Type -> Annotate Symbol a
+setType (Annotate s pos) t = Annotate (s {symbolType = t}) pos
+
 -- | Change annotation of annotated node
 annotate :: ann -> Annotate node old -> Annotate node ann
 annotate a (Annotate x _) = Annotate x a
 
 -- | Program
 data Program a = Program {
+  progTypes :: M.Map Id Type,           -- ^ user defined types
   progVariables :: [Annotate Symbol a], -- ^ global variables
   progFunctions :: [Function :~ a],     -- ^ functions
   progBody :: [Statement :~ a]          -- ^ program body statements
@@ -112,6 +116,7 @@ data Type =
   | TString
   | TBool
   | TVoid
+  | TUser Id              -- ^ user defined type
   | TAny                  -- ^ any value (dynamic typing)
   | TArray Integer Type   -- ^ array of some type
   | TRecord [(Id, Type)]  -- ^ record
@@ -119,26 +124,12 @@ data Type =
   | TFunction [Type] Type -- ^ formal arguments types and return type
   deriving (Eq)
 
-isSubtypeOf :: Type -> Type -> Bool
-isSubtypeOf TVoid TVoid = True
-isSubtypeOf TVoid _ = False
-isSubtypeOf _ TAny = True
-isSubtypeOf (TArray _ t1) (TArray _ t2) = t1 `isSubtypeOf` t2
-isSubtypeOf t1 (TField _ t2) = t1 `isSubtypeOf` t2
-isSubtypeOf (TField _ t1) t2 = t1 `isSubtypeOf` t2
-isSubtypeOf (TFunction a1 r1) (TFunction a2 r2) =
-  (r1 `isSubtypeOf` r2) && areSubtypesOf a1 a2
-isSubtypeOf t1 t2 = t1 == t2
-
-areSubtypesOf :: [Type] -> [Type] -> Bool
-areSubtypesOf ts1 ts2 =
-  (length ts1 == length ts2) && and (zipWith isSubtypeOf ts1 ts2)
-
 instance Show Type where
   show TInteger = "integer"
   show TString  = "string"
   show TBool    = "boolean"
   show TVoid    = "void"
+  show (TUser s) = s
   show TAny     = "any"
   show (TArray sz t) = printf "array [%d] of %s" sz (show t)
   show (TRecord pairs) = "record " ++ intercalate ", " (map s pairs) ++ " end"
@@ -299,6 +290,7 @@ contextId (InFunction name _) = name
 
 -- | Type checker state
 data CheckState = CheckState {
+  userTypes :: M.Map Id Type,
   symbolTable :: SymbolTable,
   contexts :: [Context],
   ckLine :: Int,

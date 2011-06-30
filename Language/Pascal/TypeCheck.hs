@@ -33,9 +33,25 @@ builtinSymbols = M.fromList $ map pair builtinFunctions
                                  symbolDefLine = 0,
                                  symbolDefCol = 0 })
 
+isSubtypeOf :: Type -> Type -> Bool
+isSubtypeOf TVoid TVoid = True
+isSubtypeOf TVoid _ = False
+isSubtypeOf _ TAny = True
+isSubtypeOf (TArray _ t1) (TArray _ t2) = t1 `isSubtypeOf` t2
+isSubtypeOf t1 (TField _ t2) = t1 `isSubtypeOf` t2
+isSubtypeOf (TField _ t1) t2 = t1 `isSubtypeOf` t2
+isSubtypeOf (TFunction a1 r1) (TFunction a2 r2) =
+  (r1 `isSubtypeOf` r2) && areSubtypesOf a1 a2
+isSubtypeOf t1 t2 = t1 == t2
+
+areSubtypesOf :: [Type] -> [Type] -> Bool
+areSubtypesOf ts1 ts2 =
+  (length ts1 == length ts2) && and (zipWith isSubtypeOf ts1 ts2)
+
 -- | Starting type checker state
 emptyState :: CheckState
 emptyState = CheckState {
+  userTypes = M.empty,
   symbolTable = [builtinSymbols],
   contexts = [],
   ckLine = 0,
@@ -56,7 +72,6 @@ returnT t x res =
                         srcColumn = srcColumn (annotation x) },
              typeOf = t,
              localSymbols = M.empty}
-
 
 instance Checker Check where
   enterContext c = do
@@ -81,12 +96,43 @@ instance Checker Check where
                                  else head cxs,
                   errMessage = msg }
 
-
 setPos :: Annotate a SrcPos -> Check ()
 setPos x = do
   st <- get
   put $ st {ckLine = srcLine (annotation x),
             ckColumn = srcColumn (annotation x)}
+
+errorOnUserTypeSymbol :: Annotate Symbol a -> Annotate Symbol a
+errorOnUserTypeSymbol (Annotate (symbolType -> TUser t) _) = error $ "Internal error (symbol): user type: " ++ t
+errorOnUserTypeSymbol x = x
+
+checkType :: Type -> Check Type
+checkType (TArray sz t) = do
+    t' <- checkType t
+    return (TArray sz t')
+checkType (TRecord pairs) = withSymbolTable $ do
+    pairs' <- forM pairs $ \(n,t) -> do
+                t' <- checkType t
+                addSymbol $ Annotate (n # t') (SrcPos 0 0)
+                return (n, t')
+    return (TRecord pairs')
+checkType (TUser name) = do
+    types <- gets userTypes
+    case M.lookup name types of
+      Just t -> checkType t
+      Nothing -> failCheck $ "Undefined type: " ++ name
+checkType t = return t
+
+checkSymbol :: Annotate Symbol SrcPos -> Check (Annotate Symbol TypeAnn)
+checkSymbol s = do
+  setPos s
+  t <- checkType (symbolTypeC s)
+  case t of
+    TUser name -> failCheck $ "Internal error: undefined user type: " ++ name
+    _ -> do
+      let s' = setType s t
+      addSymbol s'
+      return $ s' `withType` t
 
 getSymbol :: Id -> Check Symbol
 getSymbol name = do
@@ -126,25 +172,37 @@ withSymbolTable check = do
   dropSymbolTable
   return x
 
-instance Typed Program where
-  typeCheck p@(content -> Program vars fns body) = withSymbolTable $ do
-      setPos p
-      (vars', fns') <- inContext Outside $ do
-          vs <- forM vars checkSymbol
+addType :: Id -> Type -> Check (Id, Type)
+addType name tp = do
+  st <- get
+  let types = userTypes st
+  case M.lookup name types of
+    Just _  -> failCheck $ "Type is already defined: " ++ name
+    Nothing -> do
+      tp' <- checkType tp
+      put $ st {userTypes = M.insert name tp' types}
+      return (name, tp')
 
-          fs <- forM fns $ \fn -> do
-                  fn' <- typeCheck fn
-                  let f = content fn'
-                      tp = TFunction (argTypes f) (fnResultType f)
-                      s = SrcPos {
-                            srcLine = srcLine (annotation fn),
-                            srcColumn = srcColumn (annotation fn) }
-                  addSymbol $ Annotate (fnName f # tp) s
-                  return fn'
-          return (vs, fs)
+instance Typed Program where
+  typeCheck p@(content -> Program types vars fns body) = withSymbolTable $ do
+      setPos p
+      types' <- inContext Outside $
+                  forM (M.assocs types) $ uncurry addType
+      vars' <- inContext Outside $
+                 forM vars checkSymbol
+      fns'  <- inContext Outside $
+                 forM fns $ \fn -> do
+                   fn' <- typeCheck fn
+                   let f = content fn'
+                       tp = TFunction (argTypes f) (fnResultType f)
+                       s = SrcPos {
+                             srcLine = srcLine (annotation fn),
+                             srcColumn = srcColumn (annotation fn) }
+                   addSymbol $ Annotate (fnName f # tp) s
+                   return fn'
       body' <- inContext ProgramBody $
                  forM body typeCheck
-      let program = Program vars' fns' body'
+      let program = Program (M.fromList types') (map errorOnUserTypeSymbol vars') fns' body'
       return $ Annotate program $ TypeAnn {
         srcPos = SrcPos 0 0,
         typeOf = TVoid,
@@ -277,21 +335,6 @@ instance Typed Statement where
       failCheck $ "Counter end value is not Integer: " ++ show end
     body' <- mapM typeCheck body
     returnT TVoid s (For name start' end' body')
-
-checkType :: Type -> Check Type
-checkType rec@(TRecord pairs) = withSymbolTable $ do
-    forM pairs $ \(n,t) -> do
-      t' <- checkType t
-      addSymbol $ Annotate (n # t') (SrcPos 0 0)
-    return rec
-checkType t = return t
-
-checkSymbol :: Annotate Symbol SrcPos -> Check (Annotate Symbol TypeAnn)
-checkSymbol s = do
-  setPos s
-  t <- checkType (symbolTypeC s)
-  addSymbol s
-  return $ s `withType` t
 
 instance Typed Function where
   typeCheck x@(content -> Function {..}) = do
