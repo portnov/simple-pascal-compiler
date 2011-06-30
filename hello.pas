@@ -1,5 +1,9 @@
 program Hello;
 
+const
+  one = 1;
+  maxIters = 19 + one;
+
 type
   MyRecord =
     record
@@ -58,7 +62,8 @@ begin
     hello(i);
     if i = 12
       then writeln("Dozen.");
-    if i = 20
+    if i = maxIters
       then break;
     end;
 end.
+

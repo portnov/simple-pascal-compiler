@@ -51,6 +51,7 @@ areSubtypesOf ts1 ts2 =
 -- | Starting type checker state
 emptyState :: CheckState
 emptyState = CheckState {
+  userConsts = [],
   userTypes = M.empty,
   symbolTable = [builtinSymbols],
   contexts = [],
@@ -183,9 +184,68 @@ addType name tp = do
       put $ st {userTypes = M.insert name tp' types}
       return (name, tp')
 
+evalConst :: Expression :~ a -> Check Lit
+evalConst expr = do
+    case content expr of
+      Variable name -> do
+                       consts <- gets userConsts
+                       case lookup name consts of
+                         Just v -> evalConst v
+                         Nothing -> failCheck $ "No such constant: " ++ name
+      Literal v -> return v
+      Op op x y -> do
+                   x' <- evalConst x
+                   y' <- evalConst y
+                   return $ eval op x' y'
+      x -> failCheck $ "Expression is not constant: " ++ show x
+  where
+    eval Add (LInteger x) (LInteger y) = LInteger (x+y)
+    eval Sub (LInteger x) (LInteger y) = LInteger (x-y)
+    eval Mul (LInteger x) (LInteger y) = LInteger (x*y)
+    eval Div (LInteger x) (LInteger y) = LInteger (x `div` y)
+    eval Pow (LInteger x) (LInteger y) = error "pow() is not supported yet"
+    eval IsGT (LInteger x) (LInteger y) = LBool (x > y)
+    eval IsLT (LInteger x) (LInteger y) = LBool (x < y)
+    eval IsEQ (LInteger x) (LInteger y) = LBool (x == y)
+    eval IsNE (LInteger x) (LInteger y) = LBool (x /= y)
+    eval _ _ _ = error "Unsupported operand types in constant expression"
+
+litType :: Lit -> Type
+litType (LInteger _) = TInteger
+litType (LString _)  = TString
+litType (LBool _)    = TBool
+
+addConst :: Id -> Expression :~ SrcPos -> Check (Expression :~ TypeAnn)
+addConst name e = do
+  st <- get
+  let consts = userConsts st
+  case lookup name consts of
+    Just c  -> failCheck $ "Constant " ++ name ++ " was already defined as " ++ show c
+    Nothing -> do
+      val <- evalConst e
+      let result = Annotate (Literal val) $ TypeAnn {
+                     srcPos = annotation e,
+                     typeOf = litType val,
+                     localSymbols = M.empty }
+      put $ st {userConsts = (name, result): consts}
+      return result
+
 instance Typed Program where
-  typeCheck p@(content -> Program types vars fns body) = withSymbolTable $ do
+  typeCheck p@(content -> Program consts types vars fns body) = withSymbolTable $ do
       setPos p
+      consts' <- inContext Outside $
+                   forM consts $ \(n,v) -> do
+                     v' <- addConst n v
+                     let sym = Annotate {
+                                 content = Symbol {
+                                   symbolName = n,
+                                   symbolType = typeOfA v',
+                                   symbolDefLine = srcLine   (annotation v),
+                                   symbolDefCol  = srcColumn (annotation v) },
+                                 annotation = annotation v }
+                     addSymbol sym
+                     return (n, v')
+                                    
       types' <- inContext Outside $
                   forM (M.assocs types) $ uncurry addType
       vars' <- inContext Outside $
@@ -202,7 +262,7 @@ instance Typed Program where
                    return fn'
       body' <- inContext ProgramBody $
                  forM body typeCheck
-      let program = Program (M.fromList types') (map errorOnUserTypeSymbol vars') fns' body'
+      let program = Program consts' (M.fromList types') (map errorOnUserTypeSymbol vars') fns' body'
       return $ Annotate program $ TypeAnn {
         srcPos = SrcPos 0 0,
         typeOf = TVoid,
@@ -376,10 +436,6 @@ instance Typed Expression where
       x -> failCheck $ base ++ " is " ++ show x ++ ", not Record"
 
   typeCheck e@(content -> Literal x) = returnT (litType x) e (Literal x)
-    where
-      litType (LInteger _) = TInteger
-      litType (LString _)  = TString
-      litType (LBool _)    = TBool
 
   typeCheck e@(content -> Call name args) = do
     setPos e

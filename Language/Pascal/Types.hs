@@ -56,6 +56,7 @@ annotate a (Annotate x _) = Annotate x a
 
 -- | Program
 data Program a = Program {
+  progConsts :: [(Id, Expression :~ a)], -- ^ constants
   progTypes :: M.Map Id Type,           -- ^ user defined types
   progVariables :: [Annotate Symbol a], -- ^ global variables
   progFunctions :: [Function :~ a],     -- ^ functions
@@ -231,22 +232,6 @@ instance Show BinOp where
   show IsEQ = "="
   show IsNE = "!="
 
--- | Code generator state
-data CodeGenState = CGState {
-  variables :: [Id],           -- ^ declared variables (not used currently)
-  currentContext :: [Context], -- ^ current contexts stack
-  quoteMode :: Bool,           -- ^ quote (word declaration) mode
-  generated :: Code }          -- ^ already generated code
-  deriving (Eq, Show)
-
--- | Starting code generator state
-emptyGState :: CodeGenState
-emptyGState = CGState {
-  variables = [],
-  currentContext = [],
-  quoteMode = False,
-  generated = Code [M.empty] [] }
-
 -- | Compiler error
 data TError = TError {
   errLine :: Int,
@@ -291,11 +276,30 @@ contextId (InFunction name _) = name
 -- | Type checker state
 data CheckState = CheckState {
   userTypes :: M.Map Id Type,
+  userConsts :: [(Id, Expression :~ TypeAnn)],
   symbolTable :: SymbolTable,
   contexts :: [Context],
   ckLine :: Int,
   ckColumn :: Int }
   deriving (Eq, Show)
+
+-- | Code generator state
+data CodeGenState = CGState {
+  constants :: [(Id, Lit)],   --
+  variables :: [Id],           -- ^ declared variables (not used currently)
+  currentContext :: [Context], -- ^ current contexts stack
+  quoteMode :: Bool,           -- ^ quote (word declaration) mode
+  generated :: Code }          -- ^ already generated code
+  deriving (Eq, Show)
+
+-- | Starting code generator state
+emptyGState :: CodeGenState
+emptyGState = CGState {
+  constants = [],
+  variables = [],
+  currentContext = [],
+  quoteMode = False,
+  generated = Code [M.empty] [] }
 
 newtype Generate a = Generate {runGenerate :: ErrorT TError (State CodeGenState) a}
   deriving (Monad, MonadState CodeGenState, MonadError TError)

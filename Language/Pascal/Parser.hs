@@ -16,8 +16,9 @@ pascal = P.makeTokenParser $ javaStyle {
            P.commentStart = "(*",
            P.commentEnd = "*)",
            P.reservedNames = ["program", "function", "begin", "end", "var", "true", "false",
-                             ":=", "return", "if", "then", "else", "for", "to", "do", "of",
-                             "exit", "procedure", "break", "continue", "array", "record", "type" ] }
+                             "return", "if", "then", "else", "for", "to", "do", "of",
+                             "exit", "procedure", "break", "continue", "array", "record",
+                             "const", "type" ] }
 
 symbol = P.symbol pascal
 reserved = P.reserved pascal
@@ -45,6 +46,7 @@ pProgram = withAnnotation $ do
   reserved "program"
   identifier
   semi
+  consts <- option [] pConsts
   types <- M.fromList <$> option [] pTypes
   vars <- option [] pVars
   fns <- many (try pFunction <|> pProcedure)
@@ -52,7 +54,7 @@ pProgram = withAnnotation $ do
   sts <- pStatement `sepEndBy1` semi 
   reserved "end"
   dot
-  return $ Program types vars fns sts
+  return $ Program consts types vars fns sts
 
 readType str =
   case str of
@@ -77,6 +79,16 @@ pTypes = do
     tp <- pType
     semi
     return (name, content tp)
+
+pConsts :: Parser [(Id, Expression :~ SrcPos)]
+pConsts = do
+  reserved "const"
+  many1 $ do
+    name <- identifier
+    reservedOp "="
+    value <- pExpression
+    semi
+    return (name, value)
 
 pVarsList :: Parser [Annotate Symbol SrcPos]
 pVarsList = do

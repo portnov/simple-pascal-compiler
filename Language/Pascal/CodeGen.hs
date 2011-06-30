@@ -181,8 +181,13 @@ instance CodeGen (Expression :~ TypeAnn) where
   generate e = generate (content e)
 
 instance CodeGen (Expression TypeAnn) where
-  generate (Variable name) =
-    readFrom =<< getFullName name
+  generate (Variable name) = do
+    consts <- gets constants
+    case lookup name consts of
+      Just (LInteger i) -> push i
+      Just (LString s)  -> push s
+      Just (LBool b)    -> push (fromEnum b)
+      Nothing -> readFrom =<< getFullName name
 
   generate (ArrayItem name ix) = do
     arr <- getFullName name
@@ -320,6 +325,8 @@ instance CodeGen (Statement TypeAnn) where
 instance CodeGen (Program TypeAnn) where
   generate (Program {..}) = do
       inContext Outside $ do
+          st <- get
+          put $ st {constants = map getLit $ reverse progConsts}
           -- declare global variables
           forM progVariables $ \v -> do
             declare (symbolNameC v)
@@ -349,6 +356,9 @@ instance CodeGen (Program TypeAnn) where
           generate progBody
           putLabelHere =<< getEndLabel
     where
+      getLit (n, (content -> Literal x)) = (n, x)
+      getLit (n, x) = error $ "Internal error: not a literal in constant " ++ n ++ ": " ++ show x
+
       declare name = do
         i COLON
         push =<< getFullName name
