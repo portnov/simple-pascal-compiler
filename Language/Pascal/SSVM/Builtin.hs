@@ -1,15 +1,18 @@
 
-module Language.Pascal.Builtin
+module Language.Pascal.SSVM.Builtin
   (i, push,
    builtinFunctions,
+   builtinSymbols,
    lookupBuiltin
   ) where
 
 import Control.Monad.State
+import qualified Data.Map as M
 
 import Language.SSVM.Types
 
 import Language.Pascal.Types
+import Language.Pascal.SSVM.Types
 
 -- | Add any stack item to the code
 putItem :: StackItem -> Generate ()
@@ -57,4 +60,14 @@ writeln = do
 
 readln :: Generate ()
 readln = i INPUT
+
+-- | Symbol table of builtin symbols
+builtinSymbols ::  M.Map Id Symbol
+builtinSymbols = M.fromList $ map pair builtinFunctions
+  where
+    pair (name, tp, _) = (name, Symbol {
+                                 symbolName = name,
+                                 symbolType = tp,
+                                 symbolDefLine = 0,
+                                 symbolDefCol = 0 })
 

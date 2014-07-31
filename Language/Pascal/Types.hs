@@ -1,13 +1,13 @@
-{-# LANGUAGE RecordWildCards, TypeOperators, StandaloneDeriving, FlexibleContexts, UndecidableInstances, GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE RecordWildCards, TypeOperators, StandaloneDeriving, FlexibleContexts, UndecidableInstances, GeneralizedNewtypeDeriving, DeriveDataTypeable, MultiParamTypeClasses, TypeFamilies #-}
 module Language.Pascal.Types where
 
 import Control.Monad.State
 import Control.Monad.Error
+import Control.Monad.Exception
 import qualified Data.Map as M
 import Data.List (intercalate)
 import Text.Printf
-
-import Language.SSVM.Types
+import Data.Generics hiding (typeOf)
 
 -- | Type for symbol identifiers
 type Id = String
@@ -123,7 +123,7 @@ data Type =
   | TRecord [(Id, Type)]  -- ^ record
   | TField Int Type       -- ^ record field: field index and type
   | TFunction [Type] Type -- ^ formal arguments types and return type
-  deriving (Eq)
+  deriving (Eq, Typeable)
 
 instance Show Type where
   show TInteger = "integer"
@@ -232,21 +232,56 @@ instance Show BinOp where
   show IsEQ = "="
   show IsNE = "!="
 
--- | Compiler error
-data TError = TError {
-  errLine :: Int,
-  errColumn :: Int,
-  errContext :: Context,
-  errMessage :: String }
-  deriving (Eq)
+data Located e = Located ErrorLoc e
+  deriving (Eq, Typeable)
 
-instance Show TError where
-  show (TError {..}) =
-    printf "[l.%d, c.%d] (in %s): %s" errLine errColumn (show errContext) errMessage
+instance Exception e => Exception (Located e)
 
-instance Error TError where
-  noMsg = TError 0 0 Unknown "Unknown error"
-  strMsg s = TError 0 0 Unknown s
+data ErrorLoc = ErrorLoc {
+      errLine :: Int,
+      errColumn :: Int,
+      errContext :: Context
+  } deriving (Eq, Show, Typeable)
+
+nowhere :: ErrorLoc
+nowhere = ErrorLoc 0 0 Unknown
+
+data InternalError = InternalError String
+  deriving (Eq, Typeable)
+
+instance Show InternalError where
+  show (InternalError e) = "Internal compiler error: " ++ e
+
+data TypeError = 
+    UnknownSymbol String
+  | UnknownType String
+  | UnknownConstant String
+  | NotConstant String
+  | SymbolAlreadyDefined String
+  | TypeAlreadyDefined String
+  | ConstantAlreadyDefined (String, String)
+  | InvalidOperandTypes (Type, Type)
+  | NotAFunction (String, Type)
+  | InvalidFunctionCall ([Type], [Type])
+  | NotARecord (String, Type)
+  | NoSuchField (String, String)
+  | NotAnArray (String, Type)
+  | InvalidArrayIndex Type
+  | InternalT InternalError
+  deriving (Eq, Show, Typeable)
+
+internalT :: ErrorLoc -> String -> TypeError
+internalT loc msg = InternalT (InternalError loc msg)
+
+instance Exception TypeError
+
+data GeneratorError = GeneratorError ErrorLoc String
+  deriving (Eq, Show, Typeable)
+
+instance Exception GeneratorError
+
+instance CompilerError GeneratorError where
+  getErrorLocation (GeneratorError loc _) = loc
 
 -- | Compiler context (where we are?)
 data Context =
@@ -255,7 +290,7 @@ data Context =
   | ProgramBody        -- ^ In the program body
   | ForLoop Id Int     -- ^ In the for loop (started on nth instruction, with named counter)
   | InFunction Id Type -- ^ In the named function (returning named type)
-  deriving (Eq)
+  deriving (Eq, Typeable)
 
 instance Show Context where
   show Unknown              = "unknown context"
@@ -283,34 +318,18 @@ data CheckState = CheckState {
   ckColumn :: Int }
   deriving (Eq, Show)
 
--- | Code generator state
-data CodeGenState = CGState {
-  constants :: [(Id, Lit)],   --
-  variables :: [Id],           -- ^ declared variables (not used currently)
-  currentContext :: [Context], -- ^ current contexts stack
-  quoteMode :: Bool,           -- ^ quote (word declaration) mode
-  generated :: Code }          -- ^ already generated code
-  deriving (Eq, Show)
+newtype Check e a = Check {runCheck :: EMT e (State CheckState) a}
+  deriving (Monad)
 
--- | Starting code generator state
-emptyGState :: CodeGenState
-emptyGState = CGState {
-  constants = [],
-  variables = [],
-  currentContext = [],
-  quoteMode = False,
-  generated = Code [M.empty] [] }
-
-newtype Generate a = Generate {runGenerate :: ErrorT TError (State CodeGenState) a}
-  deriving (Monad, MonadState CodeGenState, MonadError TError)
-
-newtype Check a = Check {runCheck :: ErrorT TError (State CheckState) a}
-  deriving (Monad, MonadError TError, MonadState CheckState)
+instance MonadState CheckState (Check e) where
+  get = Check $ lift get
+  put = Check . lift . put
 
 class (Monad m) => Checker m where
+  type GeneralError m
   enterContext :: Context -> m ()
   dropContext :: m ()
-  failCheck :: String -> m a
+  failCheck :: (a -> GeneralError m) -> a -> m a
 
 inContext :: (Checker m) => Context -> m a -> m a
 inContext cxt actions = do

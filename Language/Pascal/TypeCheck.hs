@@ -1,19 +1,17 @@
-{-# LANGUAGE RecordWildCards, TypeOperators, TypeSynonymInstances, FlexibleInstances, ViewPatterns #-}
+{-# LANGUAGE RecordWildCards, TypeOperators, TypeSynonymInstances, FlexibleInstances, ViewPatterns, FlexibleContexts, UndecidableInstances, TypeFamilies #-}
 module Language.Pascal.TypeCheck
   (checkTypes,
-   checkSource,
-   builtinSymbols
+   checkSource
   ) where
 
 import Control.Monad
 import Control.Monad.State
-import Control.Monad.Error
+import Control.Monad.Exception
 import qualified Data.Map as M
 import Data.Maybe
 import Text.Parsec hiding (State)
 
 import Language.Pascal.Types
-import Language.Pascal.Builtin
 import Language.Pascal.Parser
 
 -- | Look up for named symbol
@@ -22,16 +20,6 @@ lookupSymbol name table =
   case filter isJust $ map (M.lookup name) table of
     [] -> Nothing
     (s:_) -> s
-
--- | Symbol table of builtin symbols
-builtinSymbols ::  M.Map Id Symbol
-builtinSymbols = M.fromList $ map pair builtinFunctions
-  where
-    pair (name, tp, _) = (name, Symbol {
-                                 symbolName = name,
-                                 symbolType = tp,
-                                 symbolDefLine = 0,
-                                 symbolDefCol = 0 })
 
 isSubtypeOf :: Type -> Type -> Bool
 isSubtypeOf TVoid TVoid = True
@@ -49,8 +37,8 @@ areSubtypesOf ts1 ts2 =
   (length ts1 == length ts2) && and (zipWith isSubtypeOf ts1 ts2)
 
 -- | Starting type checker state
-emptyState :: CheckState
-emptyState = CheckState {
+emptyState :: M.Map Id Symbol -> CheckState
+emptyState builtinSymbols = CheckState {
   userConsts = [],
   userTypes = M.empty,
   symbolTable = [builtinSymbols],
@@ -59,13 +47,13 @@ emptyState = CheckState {
   ckColumn = 0 }
 
 class Typed a where
-  typeCheck :: a :~ SrcPos -> Check (a :~ TypeAnn)
+  typeCheck :: Throws (Located TypeError) e => a :~ SrcPos -> Check e (a :~ TypeAnn)
 
 isFor :: Context -> Bool
 isFor (ForLoop _ _) = True
 isFor _             = False
 
-returnT ::  Type -> Annotate node1 SrcPos -> node -> Check (Annotate node TypeAnn)
+returnT :: Throws (Located TypeError) e => Type -> Annotate node1 SrcPos -> node -> Check e (Annotate node TypeAnn)
 returnT t x res =
   return $ Annotate res $ TypeAnn {
              srcPos = SrcPos {
@@ -74,7 +62,9 @@ returnT t x res =
              typeOf = t,
              localSymbols = M.empty}
 
-instance Checker Check where
+instance Throws (Located TypeError) e => Checker (Check e) where
+  type GeneralError (Check e) = (Located TypeError)
+
   enterContext c = do
     st <- get
     put $ st {contexts = c: contexts st}
@@ -82,22 +72,19 @@ instance Checker Check where
   dropContext = do
     st <- get
     case contexts st of
-      []  -> failCheck "Internal error in TypeCheck: dropContext on empty context!"
+      []  -> failCheck InternalError "Internal error in TypeCheck: dropContext on empty context!"
       (_:old) -> put $ st {contexts = old}
 
-  failCheck msg = do
+  failCheck constructor msg = do
     line <- gets ckLine
     col  <- gets ckColumn
     cxs <- gets contexts
-    throwError $ TError {
-                  errLine    = line,
-                  errColumn  = col,
-                  errContext = if null cxs
-                                 then Unknown
-                                 else head cxs,
-                  errMessage = msg }
+    let loc = ErrorLoc line col (if null cxs
+                                   then Unknown
+                                   else head cxs)
+    throw $ Located loc $ constructor msg
 
-setPos :: Annotate a SrcPos -> Check ()
+setPos :: Throws (Located TypeError) e => Annotate a SrcPos -> Check e ()
 setPos x = do
   st <- get
   put $ st {ckLine = srcLine (annotation x),
@@ -107,7 +94,7 @@ errorOnUserTypeSymbol :: Annotate Symbol a -> Annotate Symbol a
 errorOnUserTypeSymbol (Annotate (symbolType -> TUser t) _) = error $ "Internal error (symbol): user type: " ++ t
 errorOnUserTypeSymbol x = x
 
-checkType :: Type -> Check Type
+checkType :: Throws (Located TypeError) e => Type -> Check e Type
 checkType (TArray sz t) = do
     t' <- checkType t
     return (TArray sz t')
@@ -121,83 +108,83 @@ checkType (TUser name) = do
     types <- gets userTypes
     case M.lookup name types of
       Just t -> checkType t
-      Nothing -> failCheck $ "Undefined type: " ++ name
+      Nothing -> failCheck UnknownType name
 checkType t = return t
 
-checkSymbol :: Annotate Symbol SrcPos -> Check (Annotate Symbol TypeAnn)
+checkSymbol :: Throws (Located TypeError) e => Annotate Symbol SrcPos -> Check e (Annotate Symbol TypeAnn)
 checkSymbol s = do
   setPos s
   t <- checkType (symbolTypeC s)
   case t of
-    TUser name -> failCheck $ "Internal error: undefined user type: " ++ name
+    TUser name -> failCheck internalT $ "undefined user type: " ++ name
     _ -> do
       let s' = setType s t
       addSymbol s'
       return $ s' `withType` t
 
-getSymbol :: Id -> Check Symbol
+getSymbol :: Throws (Located TypeError) e => Id -> Check e Symbol
 getSymbol name = do
   table <- gets symbolTable
   case lookupSymbol name table of
-    Nothing -> failCheck $ "Unknown symbol: " ++ name
+    Nothing -> failCheck UnknownSymbol name
     Just s  -> return s
 
-addSymbol :: Annotate Symbol SrcPos -> Check ()
+addSymbol :: Throws (Located TypeError) e => Annotate Symbol SrcPos -> Check e ()
 addSymbol (Annotate (Symbol {..}) (SrcPos {..})) = do
   st <- get
   (current:other) <- gets symbolTable
   case M.lookup symbolName current of
-    Just s -> failCheck $ "Symbol is already defined: " ++ showSymbol s
+    Just s -> failCheck SymbolAlreadyDefined $ showSymbol s
     Nothing -> do
       let new = M.insert symbolName (Symbol symbolName symbolType srcLine srcColumn) current
       put $ st {symbolTable = (new:other)}
 
-addSymbolTable :: Check ()
+addSymbolTable :: Throws (Located TypeError) e => Check e ()
 addSymbolTable = do
   st <- get
   was <- gets symbolTable
   put $ st {symbolTable = (M.empty: was)}
 
-dropSymbolTable :: Check ()
+dropSymbolTable :: Throws (Located TypeError) e => Check e ()
 dropSymbolTable = do
   st <- get
   was <- gets symbolTable
   case was of
-    [] -> failCheck "Internal error: empty symbol table on dropSymbolTable!"
+    [] -> failCheck internalT "empty symbol table on dropSymbolTable!"
     (_:older) -> put $ st {symbolTable = older}
 
-withSymbolTable :: Check a -> Check a
+withSymbolTable :: Throws (Located TypeError) e => Check e a -> Check e a
 withSymbolTable check = do
   addSymbolTable
   x <- check
   dropSymbolTable
   return x
 
-addType :: Id -> Type -> Check (Id, Type)
+addType :: Throws (Located TypeError) e => Id -> Type -> Check e (Id, Type)
 addType name tp = do
   st <- get
   let types = userTypes st
   case M.lookup name types of
-    Just _  -> failCheck $ "Type is already defined: " ++ name
+    Just _  -> failCheck TypeAlreadyDefined name
     Nothing -> do
       tp' <- checkType tp
       put $ st {userTypes = M.insert name tp' types}
       return (name, tp')
 
-evalConst :: Expression :~ a -> Check Lit
+evalConst :: Throws (Located TypeError) e => Expression :~ a -> Check e Lit
 evalConst expr = do
     case content expr of
       Variable name -> do
                        consts <- gets userConsts
                        case lookup name consts of
                          Just v -> evalConst v
-                         Nothing -> failCheck $ "No such constant: " ++ name
+                         Nothing -> failCheck UnknownConstant name
       Literal v -> return v
       Op op x y -> do
                    x' <- evalConst x
                    y' <- evalConst y
                    return $ eval op x' y'
-      x -> failCheck $ "Expression is not constant: " ++ show x
+      x -> failCheck NotConstant x
   where
     eval Add (LInteger x) (LInteger y) = LInteger (x+y)
     eval Sub (LInteger x) (LInteger y) = LInteger (x-y)
@@ -215,12 +202,12 @@ litType (LInteger _) = TInteger
 litType (LString _)  = TString
 litType (LBool _)    = TBool
 
-addConst :: Id -> Expression :~ SrcPos -> Check (Expression :~ TypeAnn)
+addConst :: Throws (Located TypeError) e => Id -> Expression :~ SrcPos -> Check e (Expression :~ TypeAnn)
 addConst name e = do
   st <- get
   let consts = userConsts st
   case lookup name consts of
-    Just c  -> failCheck $ "Constant " ++ name ++ " was already defined as " ++ show c
+    Just c  -> failCheck ConstantAlreadyDefined name (show c)
     Nothing -> do
       val <- evalConst e
       let result = Annotate (Literal val) $ TypeAnn {
@@ -421,9 +408,9 @@ instance Typed Expression where
       TArray _ tp -> do
           ix' <- typeCheck ix
           when (typeOfA ix' /= TInteger) $
-            failCheck $ "Array index is " ++ show (typeOfA ix') ++ ", not Integer"
+            failCheck InvalidArrayIndex (typeOfA ix')
           returnT tp e (ArrayItem name ix')
-      x -> failCheck $ name ++ " is " ++ show x ++ ", not Array"
+      x -> failCheck NotAnArray (name, x)
 
   typeCheck e@(content -> RecordField base field) = do
     setPos e
@@ -431,9 +418,9 @@ instance Typed Expression where
     case symbolType baseSym of
       TRecord pairs -> case findField field pairs of
                          Just (ix,t) -> returnT (TField ix t) e (RecordField base field)
-                         Nothing -> failCheck $ "No such field in " ++ base ++ " record: " ++ field
+                         Nothing -> failCheck NoSuchField (base, field)
       TField ix t -> returnT (TField ix t) e (RecordField base field)
-      x -> failCheck $ base ++ " is " ++ show x ++ ", not Record"
+      x -> failCheck NotARecord (base, x)
 
   typeCheck e@(content -> Literal x) = returnT (litType x) e (Literal x)
 
@@ -446,8 +433,8 @@ instance Typed Expression where
           let actualTypes = map typeOfA args'
           if actualTypes `areSubtypesOf` formalArgTypes
             then returnT resType e (Call name args')
-            else failCheck $ "Invalid types in function call: " ++ show actualTypes ++ " instead of " ++ show formalArgTypes
-      t -> failCheck $ "Symbol " ++ name ++ " is not a function, but " ++ show t
+            else failCheck InvalidFunctionCall (actualTypes, formalArgTypes)
+      t -> failCheck NotAFunction name t
 
   typeCheck e@(content -> Op op x y) = do
     setPos e
@@ -459,22 +446,22 @@ instance Typed Expression where
       then if op `elem` [IsEQ, IsNE, IsGT, IsLT]
              then returnT TBool    e (Op op x' y')
              else returnT TInteger e (Op op x' y')
-      else failCheck $ "Invalid operand types: " ++ show tx ++ ", " ++ show ty
+      else failCheck InvalidOperandTypes (tx, ty)
 
-checkTypes :: Program :~ SrcPos -> Program :~ TypeAnn
-checkTypes prog = evalState check emptyState
+checkTypes :: M.Map Id Symbol -> Program :~ SrcPos -> Program :~ TypeAnn
+checkTypes builtinSymbols prog = evalState check (emptyState builtinSymbols)
   where
     check :: State CheckState (Program :~ TypeAnn)
     check = do
-      x <- runErrorT (runCheck $ typeCheck prog)
+      x <- runEMT (runCheck $ typeCheck prog)
       case x of
         Right result -> return result
         Left  err -> fail $ "type checker: " ++ show err
 
-checkSource :: FilePath -> IO (Program :~ TypeAnn)
-checkSource path = do
+checkSource :: M.Map Id Symbol -> FilePath -> IO (Program :~ TypeAnn)
+checkSource builtinSymbols path = do
   str <- readFile path
   case parse pProgram path str of
     Left err -> fail $ "parser: " ++ show err
-    Right prog -> return (checkTypes prog)
+    Right prog -> return (checkTypes builtinSymbols prog)
 

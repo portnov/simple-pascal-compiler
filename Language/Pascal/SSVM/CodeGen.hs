@@ -1,5 +1,5 @@
 {-# LANGUAGE TypeSynonymInstances, TypeOperators, ViewPatterns, FlexibleInstances, RecordWildCards, FlexibleContexts, OverlappingInstances #-}
-module Language.Pascal.CodeGen (runCodeGen, CodeGen (..)) where
+module Language.Pascal.SSVM.CodeGen (runCodeGen, CodeGen (..)) where
 
 import Control.Monad
 import Control.Monad.State
@@ -10,7 +10,8 @@ import qualified Data.Map as M
 import Language.SSVM.Types
 
 import Language.Pascal.Types
-import Language.Pascal.Builtin
+import Language.Pascal.SSVM.Types
+import Language.Pascal.SSVM.Builtin
 
 instance Checker Generate where
   enterContext c = do
@@ -25,13 +26,10 @@ instance Checker Generate where
 
   failCheck msg = do
     cxs <- gets currentContext
-    throwError $ TError {
-                  errLine    = 0,
-                  errColumn  = 0,
-                  errContext = if null cxs
-                                 then Unknown
-                                 else head cxs,
-                  errMessage = msg }
+    let loc = ErrorLoc 0 0 (if null cxs
+                              then Unknown
+                              else head cxs)
+    throwError $ GeneratorError loc msg
 
 -- | Run code generator
 runCodeGen :: Generate () -> Code

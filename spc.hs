@@ -10,7 +10,8 @@ import Language.SSVM.Binary
 import Language.SSVM.Interpreter
 
 import Language.Pascal.TypeCheck
-import Language.Pascal.CodeGen
+import Language.Pascal.SSVM.CodeGen
+import Language.Pascal.SSVM.Builtin
 
 data Flag =
     Mode Mode
@@ -76,7 +77,7 @@ main = do
       let dst = case outputFile of
                   Nothing -> replaceExtension inputFile ".bytecode"
                   Just x  -> x
-      prog <- checkSource inputFile
+      prog <- checkSource builtinSymbols inputFile
       let codeRev = runCodeGen (generate prog)
           code = codeRev {cCode = reverse (cCode codeRev)}
       case mode of
