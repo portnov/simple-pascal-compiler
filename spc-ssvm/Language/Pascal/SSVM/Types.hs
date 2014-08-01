@@ -1,8 +1,8 @@
-{-# LANGUAGE RecordWildCards, TypeOperators, StandaloneDeriving, FlexibleContexts, UndecidableInstances, GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE RecordWildCards, TypeOperators, StandaloneDeriving, FlexibleContexts, UndecidableInstances, GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
 module Language.Pascal.SSVM.Types where
 
 import Control.Monad.State
-import Control.Monad.Error
+import Control.Monad.Exception
 import qualified Data.Map as M
 import Data.List (intercalate)
 import Text.Printf
@@ -29,5 +29,9 @@ emptyGState = CGState {
   generated = Code [M.empty] [] }
 
 newtype Generate e a = Generate {runGenerate :: EMT e (State CodeGenState) a}
-  deriving (Monad, MonadState CodeGenState, MonadError TError)
+  deriving (Monad)
+
+instance MonadState CodeGenState (Generate e) where
+  get = Generate $ lift get
+  put = Generate . lift . put
 

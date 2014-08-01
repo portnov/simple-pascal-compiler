@@ -63,7 +63,7 @@ returnT t x res =
              localSymbols = M.empty}
 
 instance Throws (Located TypeError) e => Checker (Check e) where
-  type GeneralError (Check e) = (Located TypeError)
+  type GeneralError (Check e) = TypeError
 
   enterContext c = do
     st <- get
@@ -72,7 +72,7 @@ instance Throws (Located TypeError) e => Checker (Check e) where
   dropContext = do
     st <- get
     case contexts st of
-      []  -> failCheck InternalError "Internal error in TypeCheck: dropContext on empty context!"
+      []  -> failCheck internalT "Internal error in TypeCheck: dropContext on empty context!"
       (_:old) -> put $ st {contexts = old}
 
   failCheck constructor msg = do
@@ -82,7 +82,7 @@ instance Throws (Located TypeError) e => Checker (Check e) where
     let loc = ErrorLoc line col (if null cxs
                                    then Unknown
                                    else head cxs)
-    throw $ Located loc $ constructor msg
+    Check $ throw $ Located loc $ constructor msg
 
 setPos :: Throws (Located TypeError) e => Annotate a SrcPos -> Check e ()
 setPos x = do
@@ -184,7 +184,7 @@ evalConst expr = do
                    x' <- evalConst x
                    y' <- evalConst y
                    return $ eval op x' y'
-      x -> failCheck NotConstant x
+      x -> failCheck NotConstant (show x)
   where
     eval Add (LInteger x) (LInteger y) = LInteger (x+y)
     eval Sub (LInteger x) (LInteger y) = LInteger (x-y)
@@ -207,7 +207,7 @@ addConst name e = do
   st <- get
   let consts = userConsts st
   case lookup name consts of
-    Just c  -> failCheck ConstantAlreadyDefined name (show c)
+    Just c  -> failCheck ConstantAlreadyDefined (name, show c)
     Nothing -> do
       val <- evalConst e
       let result = Annotate (Literal val) $ TypeAnn {
@@ -288,9 +288,9 @@ instance Typed LValue where
       TArray _ tp -> do
                      ix' <- typeCheck ix
                      when (typeOfA ix' /= TInteger) $
-                       failCheck $ "Invalid array item lvalue: index is " ++ show (typeOfA ix') ++ ", not Integer"
+                       failCheck InvalidArrayItemLValue (typeOfA ix')
                      returnT tp v (LArray name ix')
-      x -> failCheck $ "Invalid lvalue: " ++ name ++ " is " ++ show x ++ ", not Array"
+      x -> failCheck InvalidArrayLValue (name, x)
 
   typeCheck v@(content -> LField base field) = do
     setPos v
@@ -298,8 +298,8 @@ instance Typed LValue where
     case symbolType baseSym of
       TRecord pairs -> case findField field pairs of
                          Just (ix,t) -> returnT (TField ix t) v (LField base field)
-                         Nothing -> failCheck $ "No such field in " ++ base ++ " record: " ++ field
-      x -> failCheck $ base ++ " is " ++ show x ++ ", not Record"
+                         Nothing -> failCheck NoSuchField (base, field)
+      x -> failCheck NotARecord (base, x)
 
 instance Typed Statement where
   typeCheck x@(content -> Assign lvalue expr) = do
@@ -312,7 +312,7 @@ instance Typed Statement where
       then do
            let result = Assign lhs rhs
            returnT lhsType x result
-      else failCheck $ "Invalid assignment: LHS type is " ++ show lhsType ++ ", but RHS type is " ++ show rhsType
+      else failCheck AssignmentTypeMismatch (lhsType, rhsType)
 
   typeCheck s@(content -> Procedure name args) = do
     setPos s
@@ -323,21 +323,21 @@ instance Typed Statement where
           let actualTypes = map typeOfA args'
           if actualTypes `areSubtypesOf` formalArgTypes
             then returnT TVoid s (Procedure name args')
-            else failCheck $ "Invalid types in procedure call: " ++ show actualTypes ++ " instead of " ++ show formalArgTypes
-      t -> failCheck $ "Symbol " ++ name ++ " is not a procedure, but " ++ show t
+            else failCheck InvalidFunctionCall (actualTypes, formalArgTypes)
+      t -> failCheck NotAProcedure (name, t)
 
   typeCheck s@(content -> Break) = do
       setPos s
       cxs <- gets contexts
       if null (filter isFor cxs)
-        then failCheck "break statement not in for loop"
+        then failCheck MissplacedBreak ()
         else returnT TVoid s Break
 
   typeCheck s@(content -> Continue) = do
       setPos s
       cxs <- gets contexts
       if null (filter isFor cxs)
-        then failCheck "continue statement not in for loop"
+        then failCheck MissplacedContinue ()
         else returnT TVoid s Continue
 
   typeCheck s@(content -> Exit) = do
@@ -346,7 +346,7 @@ instance Typed Statement where
     case cxs of
       (InFunction _ TVoid:_) -> returnT TVoid s Exit
       (ProgramBody:_)        -> returnT TVoid s Exit
-      _                      -> failCheck "exit statement not in procedure or program body"
+      _                      -> failCheck MissplacedExit ()
 
   typeCheck s@(content -> Return x) = do
     setPos s
@@ -354,17 +354,17 @@ instance Typed Statement where
     let retType = typeOfA x'
     cxs <- gets contexts
     case cxs of
-      (InFunction _ TVoid:_) -> failCheck "return statement in procedure"
+      (InFunction _ TVoid:_) -> failCheck MissplacedReturn "return statement in procedure"
       (InFunction _ t:_)
           | retType `isSubtypeOf` t -> returnT (typeOfA x') s (Return x')
-          | otherwise -> failCheck $ "Return value type does not match: expecting " ++ show t ++ ", got " ++ show retType
-      _               -> failCheck $ "return statement not in function"
+          | otherwise -> failCheck ReturnTypeMismatch (t, retType)
+      _               -> failCheck MissplacedReturn "return statement not in function"
 
   typeCheck s@(content -> IfThenElse c a b) = do
     setPos s
     c' <- typeCheck c
     when (typeOfA c' /= TBool) $
-      failCheck $ "Condition type is not Boolean: " ++ show c
+      failCheck InvalidConditionType (show c)
     a' <- mapM typeCheck a
     b' <- mapM typeCheck b
     returnT TVoid s (IfThenElse c' a' b')
@@ -373,13 +373,13 @@ instance Typed Statement where
     setPos s
     sym <- getSymbol name
     when (symbolType sym /= TInteger) $
-      failCheck $ "Counter variable is not Integer: " ++ name
+      failCheck InvalidTypeInLoop ("Counter variable", name)
     start' <- typeCheck start
     when (typeOfA start' /= TInteger) $
-      failCheck $ "Counter start value is not Integer: " ++ show start
+      failCheck InvalidTypeInLoop ("Counter start value", show start)
     end' <- typeCheck end
     when (typeOfA end' /= TInteger) $
-      failCheck $ "Counter end value is not Integer: " ++ show end
+      failCheck InvalidTypeInLoop ("Counter end value", show end)
     body' <- mapM typeCheck body
     returnT TVoid s (For name start' end' body')
 
@@ -434,7 +434,7 @@ instance Typed Expression where
           if actualTypes `areSubtypesOf` formalArgTypes
             then returnT resType e (Call name args')
             else failCheck InvalidFunctionCall (actualTypes, formalArgTypes)
-      t -> failCheck NotAFunction name t
+      t -> failCheck NotAFunction (name, t)
 
   typeCheck e@(content -> Op op x y) = do
     setPos e
@@ -453,7 +453,7 @@ checkTypes builtinSymbols prog = evalState check (emptyState builtinSymbols)
   where
     check :: State CheckState (Program :~ TypeAnn)
     check = do
-      x <- runEMT (runCheck $ typeCheck prog)
+      x <- tryEMT (runCheck $ typeCheck prog)
       case x of
         Right result -> return result
         Left  err -> fail $ "type checker: " ++ show err

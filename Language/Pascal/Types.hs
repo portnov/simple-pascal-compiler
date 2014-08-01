@@ -235,6 +235,10 @@ instance Show BinOp where
 data Located e = Located ErrorLoc e
   deriving (Eq, Typeable)
 
+instance Show e => Show (Located e) where
+  show (Located loc e) =
+    printf "At line %d, col. %d:\n\t%s" (errLine loc) (errColumn loc) (show e)
+
 instance Exception e => Exception (Located e)
 
 data ErrorLoc = ErrorLoc {
@@ -262,26 +266,34 @@ data TypeError =
   | ConstantAlreadyDefined (String, String)
   | InvalidOperandTypes (Type, Type)
   | NotAFunction (String, Type)
+  | NotAProcedure (String, Type)
   | InvalidFunctionCall ([Type], [Type])
   | NotARecord (String, Type)
   | NoSuchField (String, String)
   | NotAnArray (String, Type)
   | InvalidArrayIndex Type
+  | InvalidArrayItemLValue Type
+  | InvalidArrayLValue (String, Type)
+  | AssignmentTypeMismatch (Type, Type)
+  | ReturnTypeMismatch (Type, Type)
+  | InvalidConditionType String
+  | MissplacedBreak ()
+  | MissplacedContinue ()
+  | MissplacedExit ()
+  | MissplacedReturn String
+  | InvalidTypeInLoop (String, String)
   | InternalT InternalError
   deriving (Eq, Show, Typeable)
 
-internalT :: ErrorLoc -> String -> TypeError
-internalT loc msg = InternalT (InternalError loc msg)
+internalT :: String -> TypeError
+internalT msg = InternalT (InternalError msg)
 
 instance Exception TypeError
 
-data GeneratorError = GeneratorError ErrorLoc String
+data GeneratorError = GeneratorError String
   deriving (Eq, Show, Typeable)
 
 instance Exception GeneratorError
-
-instance CompilerError GeneratorError where
-  getErrorLocation (GeneratorError loc _) = loc
 
 -- | Compiler context (where we are?)
 data Context =
@@ -329,7 +341,7 @@ class (Monad m) => Checker m where
   type GeneralError m
   enterContext :: Context -> m ()
   dropContext :: m ()
-  failCheck :: (a -> GeneralError m) -> a -> m a
+  failCheck :: (a -> GeneralError m) -> a -> m b
 
 inContext :: (Checker m) => Context -> m a -> m a
 inContext cxt actions = do

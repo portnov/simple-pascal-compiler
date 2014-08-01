@@ -1,4 +1,4 @@
-Name:           simple-pascal
+Name:           simple-pascal-ssvm
 Version:        0.1
 Cabal-Version:  >= 1.6
 License:        BSD3
@@ -18,14 +18,16 @@ Description:    This package provides a compiler for simplified variant of Pasca
 Extra-source-files: hello.pas Makefile
 
 library
-  Exposed-Modules: Language.Pascal.Types
-                   Language.Pascal.Parser
-                   Language.Pascal.TypeCheck
+  Exposed-Modules: Language.Pascal.SSVM.Builtin
+                   Language.Pascal.SSVM.CodeGen
+                   Language.Pascal.SSVM.Types
 
   Build-Depends:  base >= 3 && <= 5, containers,
                   mtl > 1, filepath, parsec >= 3,
                   syb,
-                  control-monad-exception
+                  control-monad-exception,
+                  simple-stacked-vm >= 0.1.1,
+                  simple-pascal >= 0.1
 
   ghc-options: -fwarn-unused-imports
 

@@ -15,7 +15,7 @@ import Language.Pascal.Types
 import Language.Pascal.SSVM.Types
 
 -- | Add any stack item to the code
-putItem :: StackItem -> Generate ()
+putItem :: StackItem -> Generate e ()
 putItem x = do
   st <- get
   let gen = generated st
@@ -23,7 +23,7 @@ putItem x = do
   put $ st {generated = gen {cCode = code}}
 
 -- | Generate instruction
-i :: Instruction -> Generate ()
+i :: Instruction -> Generate e ()
 i x = do
   q <- gets quoteMode
   if q
@@ -31,34 +31,34 @@ i x = do
     else putItem (SInstruction x)
 
 -- | Generate PUSH instruction
-push :: StackType a => a -> Generate ()
+push :: StackType a => a -> Generate e ()
 push x = i (PUSH $ toStack x)
 
 -- | List of builtin functions
-builtinFunctions :: [(Id, Type, Generate ())]
+builtinFunctions :: [(Id, Type, Generate e ())]
 builtinFunctions =
  [("write",   TFunction [TAny] TVoid, write),
   ("writeln", TFunction [TAny] TVoid, writeln),
   ("readln",  TFunction []     TAny,  readln) ]
 
 -- | If named symbol is builtin, return it's definition
-lookupBuiltin :: Id -> Maybe (Generate ())
+lookupBuiltin :: Id -> Maybe (Generate e ())
 lookupBuiltin name = look builtinFunctions
   where
     look []                               = Nothing
     look ((s, _, code):other) | s == name = Just code
                               | otherwise = look other
 
-write :: Generate ()
+write :: Generate e ()
 write = i PRINT
 
-writeln :: Generate ()
+writeln :: Generate e ()
 writeln = do
   i PRINT
   push "\n"
   i PRINT
 
-readln :: Generate ()
+readln :: Generate e ()
 readln = i INPUT
 
 -- | Symbol table of builtin symbols

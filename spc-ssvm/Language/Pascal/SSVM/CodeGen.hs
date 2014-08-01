@@ -1,9 +1,9 @@
-{-# LANGUAGE TypeSynonymInstances, TypeOperators, ViewPatterns, FlexibleInstances, RecordWildCards, FlexibleContexts, OverlappingInstances #-}
+{-# LANGUAGE TypeSynonymInstances, TypeOperators, ViewPatterns, FlexibleInstances, RecordWildCards, FlexibleContexts, OverlappingInstances, TypeFamilies, UndecidableInstances #-}
 module Language.Pascal.SSVM.CodeGen (runCodeGen, CodeGen (..)) where
 
 import Control.Monad
 import Control.Monad.State
-import Control.Monad.Error
+import Control.Monad.Exception
 import Data.List (intercalate, findIndex)
 import qualified Data.Map as M
 
@@ -13,7 +13,8 @@ import Language.Pascal.Types
 import Language.Pascal.SSVM.Types
 import Language.Pascal.SSVM.Builtin
 
-instance Checker Generate where
+instance Throws (Located GeneratorError) e => Checker (Generate e) where
+  type GeneralError (Generate e) = GeneratorError
   enterContext c = do
     st <- get
     put $ st {currentContext = c: currentContext st}
@@ -21,29 +22,29 @@ instance Checker Generate where
   dropContext = do
     st <- get
     case currentContext st of
-      [] -> failCheck "Internal error: empty context on dropContext!"
+      [] -> failCheck GeneratorError "Internal error: empty context on dropContext!"
       (_:xs) -> put $ st {currentContext = xs}
 
-  failCheck msg = do
+  failCheck constructor msg = do
     cxs <- gets currentContext
     let loc = ErrorLoc 0 0 (if null cxs
                               then Unknown
                               else head cxs)
-    throwError $ GeneratorError loc msg
+    Generate $ throw $ Located loc $ constructor msg
 
 -- | Run code generator
-runCodeGen :: Generate () -> Code
+-- runCodeGen :: Generate e () -> Code
 runCodeGen gen = generated $ execState go emptyGState
   where
     go :: State CodeGenState ()
     go = do
-      x <- runErrorT (runGenerate gen)
+      x <- tryEMT (runGenerate gen)
       case x of
         Right result -> return result
         Left  err    -> fail $ "code generator: " ++ show err
 
 -- | Get full name of current context
-getContextString :: Generate String
+getContextString :: Generate e String
 getContextString = do
     cxs <- gets (map contextId . filter isProgramPart . currentContext)
     return $ intercalate "_" (reverse cxs)
@@ -51,19 +52,19 @@ getContextString = do
     isProgramPart (ForLoop _ _) = False
     isProgramPart _             = True
 
-setQuoteMode :: Bool -> Generate ()
+setQuoteMode :: Bool -> Generate e ()
 setQuoteMode b = do
   st <- get
   put $ st {quoteMode = b}
 
 -- | Get label which is at end of current context
 -- (program or function)
-getEndLabel :: Generate String
+getEndLabel :: Generate e String
 getEndLabel = do
   cstr <- getContextString
   return $ cstr ++ "__END"
 
-variable :: String -> Generate String
+variable :: String -> Generate e String
 variable seed = do
   st <- get
   cstr <- getContextString
@@ -72,13 +73,13 @@ variable seed = do
   return name
 
 -- | Get full name of variable (with context)
-getFullName :: String -> Generate String
+getFullName :: String -> Generate e String
 getFullName seed = do
   cstr <- getContextString
   return $ cstr ++ "_" ++ seed
 
 -- | Put a label and return it's full name
-label :: String -> Generate String
+label :: String -> Generate e String
 label seed = do
   st <- get
   cstr <- getContextString
@@ -92,26 +93,26 @@ label seed = do
 
 -- | Return full name of label in the for loop.
 -- fail if current context is not for loop.
-forLoopLabel :: String -> String -> Generate String
+forLoopLabel :: Throws (Located GeneratorError) e => String -> String -> Generate e String
 forLoopLabel src seed = do
   cxs <- gets currentContext
   case cxs of
-    []              -> failCheck "Internal error: forLoopLabel on empty context!"
+    []              -> failCheck GeneratorError "Internal error: forLoopLabel on empty context!"
     (ForLoop _ _:_) -> return $ intercalate "_" (map contextId $ reverse cxs) ++ "_" ++ seed
-    _               -> failCheck $ src ++ " not in for loop"
+    _               -> failCheck GeneratorError $ src ++ " not in for loop"
 
 -- | Get name of counter variable of for loop.
 -- fail if current context is not for loop.
-getForCounter :: Generate Id
+getForCounter :: Throws (Located GeneratorError) e => Generate e Id
 getForCounter = do
   cxs <- gets currentContext
   case cxs of
-    []              -> failCheck "Internal error: getForCounter on empty context!"
+    []              -> failCheck GeneratorError "Internal error: getForCounter on empty context!"
     (ForLoop i _:_) -> return i
-    _               -> failCheck "Internal error: getForCounter not in for loop!"
+    _               -> failCheck GeneratorError "Internal error: getForCounter not in for loop!"
 
 -- | Generate full label name
-labelFromHere :: String -> Generate String
+labelFromHere :: Throws (Located GeneratorError) e => String -> Generate e String
 labelFromHere seed = do
   st <- get
   cstr <- getContextString
@@ -120,7 +121,7 @@ labelFromHere seed = do
   return name
 
 -- | Put label here
-putLabelHere :: String -> Generate ()
+putLabelHere :: Throws (Located GeneratorError) e => String -> Generate e ()
 putLabelHere name = do
   st <- get
   let gen = generated st
@@ -129,20 +130,20 @@ putLabelHere name = do
       marks = M.insert name n curMarks
   put $ st {generated = gen {cMarks = marks:oldMarks}}
 
-goto :: String -> Generate ()
+goto :: Throws (Located GeneratorError) e => String -> Generate e ()
 goto name = jumpWith GOTO name
 
-jumpWith :: Instruction -> String -> Generate ()
+jumpWith :: Throws (Located GeneratorError) e => Instruction -> String -> Generate e ()
 jumpWith jump name = do
   i (GETMARK name)
   i jump
 
-assignTo :: Id -> Generate ()
+assignTo :: Throws (Located GeneratorError) e => Id -> Generate e ()
 assignTo name = do
   i (CALL name)
   i ASSIGN
 
-readFrom :: Id -> Generate ()
+readFrom :: Throws (Located GeneratorError) e => Id -> Generate e ()
 readFrom name = do
   i (CALL name)
   i READ
@@ -152,7 +153,7 @@ findFieldIndex name pairs =
   (1+) `fmap` findIndex (\p -> fst p == name) pairs
 
 class CodeGen a where
-  generate :: a -> Generate ()
+  generate :: Throws (Located GeneratorError) e => a -> Generate e ()
 
 instance (CodeGen (a TypeAnn)) => CodeGen (a :~ TypeAnn) where
   generate = generate . content
@@ -169,12 +170,12 @@ instance CodeGen (Expression :~ TypeAnn) where
                            i (CALL rec)
                            push ix
                            i READ_ARRAY
-                         Nothing -> failCheck $ "Internal error: no such field in " ++ base ++ " record: " ++ field
+                         Nothing -> failCheck GeneratorError $ "Internal error: no such field in " ++ base ++ " record: " ++ field
       TField ix _ -> do
           i (CALL rec)
           push ix
           i READ_ARRAY
-      x -> failCheck $ "Internal error: " ++ base ++ " is " ++ show x ++ ", not a Record"
+      x -> failCheck GeneratorError $ "Internal error: " ++ base ++ " is " ++ show x ++ ", not a Record"
 
   generate e = generate (content e)
 
@@ -194,7 +195,7 @@ instance CodeGen (Expression TypeAnn) where
     i READ_ARRAY
 
   generate (RecordField _ _) =
-    failCheck "Internal error: RecordField in instance CodeGen (Expression TypeAnn)"
+    failCheck GeneratorError "Internal error: RecordField in instance CodeGen (Expression TypeAnn)"
 
   generate (Literal x) =
     case x of
@@ -217,7 +218,7 @@ instance CodeGen (Expression TypeAnn) where
       Mul -> i MUL
       Div -> i DIV
       Mod -> i REM
-      Pow -> failCheck "pow() is not supported yet"
+      Pow -> failCheck GeneratorError "pow() is not supported yet"
       IsGT -> i CMP
       IsLT -> i CMP >> i NEG
       IsEQ -> i CMP >> i ABS >> push (1 :: Integer) >> i SUB
@@ -241,12 +242,12 @@ instance CodeGen (LValue :~ TypeAnn) where
                            i (CALL var)
                            push ix
                            i ASSIGN_ARRAY
-                         Nothing -> failCheck $ "Internal error: no such field in " ++ base ++ " record: " ++ field
+                         Nothing -> failCheck GeneratorError $ "Internal error: no such field in " ++ base ++ " record: " ++ field
       TField ix _ -> do
         i (CALL var)
         push ix
         i ASSIGN_ARRAY
-      x -> failCheck $ "Internal error: " ++ base ++ " is " ++ show x ++ ", not a Record"
+      x -> failCheck GeneratorError $ "Internal error: " ++ base ++ " is " ++ show x ++ ", not a Record"
 
 instance CodeGen (Statement TypeAnn) where
   generate (Assign lvalue expr) = do
