@@ -28,12 +28,22 @@ x = Symbol {
       symbolDefLine = 0,
       symbolDefCol = 0 }
 
+y :: Symbol
+y = Symbol {
+      symbolName = "y",
+      symbolType = TInteger,
+      symbolConstValue = Nothing,
+      symbolContext = InFunction "test" TVoid,
+      symbolIndex = 0,
+      symbolDefLine = 0,
+      symbolDefCol = 0 }
+
 testType :: TypeAnn 
 testType = TypeAnn {
   srcPos = SrcPos 0 0,
   typeOf = TInteger,
   localSymbols = M.empty,
-  allSymbols = [M.singleton "x" x] }
+  allSymbols = [M.singleton "y" y, M.singleton "x" x] }
 
 expr :: Expression :~ TypeAnn
 expr = Annotate {
@@ -41,6 +51,28 @@ expr = Annotate {
                           (Annotate (Literal (LInteger 1)) testType),
          annotation = testType
        }
+
+assignment :: Statement :~ TypeAnn
+assignment =
+  Annotate {
+    content = Assign (Annotate (LVariable "y") testType) expr,
+    annotation = testType
+  }
+
+this :: Id -> Annotate Symbol SrcPos
+this name =
+  Annotate {
+    content = Symbol {
+                symbolName = "this",
+                symbolType = TRecord (Just name) [],
+                symbolConstValue = Nothing,
+                symbolContext = Outside,
+                symbolIndex = 0,
+                symbolDefLine = 0,
+                symbolDefCol = 0
+              },
+    annotation = SrcPos 0 0
+  }
 
 test :: (Throws ENotFound e, Throws ENotLoaded e, Throws UnexpectedEndMethod e, Throws (Located GeneratorError) e) => Generate e ()
 test = do
@@ -58,11 +90,10 @@ test = do
 
   testMethod <- newMethod [ACC_PUBLIC] "test" [] ReturnsVoid $ do
     setStackSize 20
-    setMaxLocals 2
+    setMaxLocals 3
 
-    generateJvm "Test" $ generate expr
+    generateJvm "Test" $ generate assignment
 
-    i0 $ ISTORE 1
     getStaticField Java.Lang.system Java.IO.out
     loadString "Result: %d\n"
     iconst_1

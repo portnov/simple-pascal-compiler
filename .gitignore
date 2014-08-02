@@ -3,6 +3,7 @@
 .*.swp
 *.swp
 *.bytecode
+*.class
 dist/
 spc
 cabal.sandbox.config

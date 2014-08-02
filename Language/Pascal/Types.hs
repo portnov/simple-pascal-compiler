@@ -280,6 +280,7 @@ data TypeError =
   | SymbolAlreadyDefined String
   | TypeAlreadyDefined String
   | ConstantAlreadyDefined (String, String)
+  | ConstLValue String
   | InvalidOperandTypes (Type, Type)
   | NotAFunction (String, Type)
   | NotAProcedure (String, Type)

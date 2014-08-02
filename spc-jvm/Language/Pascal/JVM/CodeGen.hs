@@ -4,7 +4,6 @@ module Language.Pascal.JVM.CodeGen where
 
 import Control.Monad
 import Control.Monad.State
-import Control.Monad.Error
 import Control.Monad.Exception
 import Data.List (intercalate, findIndex)
 import qualified Data.Map as M
@@ -140,23 +139,27 @@ getSymbolType name table = do
     Nothing -> failCheck GeneratorError $ "Unknown symbol: " ++ name
     Just symbol -> return $ symbolType symbol
 
+getSymbol :: Throws (Located GeneratorError) e => Id -> SymbolTable -> GenerateJvm e Symbol
+getSymbol name table = do
+  case lookupSymbol name table of
+    Nothing -> failCheck GeneratorError $ "Unknown symbol: " ++ name
+    Just symbol -> return symbol
+
 loadVariable :: Throws (Located GeneratorError) e => Id -> SymbolTable -> GenerateJvm e ()
 loadVariable name table = do
-  case lookupSymbol name table of
-    Nothing -> failCheck GeneratorError $ "Unknown variable: " ++ name
-    Just symbol ->
-      case symbolConstValue symbol of
-        Just const -> pushConst const
-        Nothing -> if symbolContext symbol == Outside
-                     then loadGlobal name (getJvmType $ symbolType symbol)
-                     else loadLocal (symbolIndex symbol) (getJvmType $ symbolType symbol)
+  symbol <- getSymbol name table
+  case symbolConstValue symbol of
+    Just const -> pushConst const
+    Nothing -> if symbolContext symbol == Outside
+                 then loadGlobal name (getJvmType $ symbolType symbol)
+                 else loadLocal (symbolIndex symbol) (getJvmType $ symbolType symbol)
 
 loadLocal :: Throws (Located GeneratorError) e => Int -> FieldType -> GenerateJvm e ()
 loadLocal idx t = do
   instruction <- getInstruction "local variable type" t tiLoad
   prog <- gets programName
   liftG $ 
-    J.i0 $ instruction $ fromIntegral idx
+    J.i0 $ instruction $ fromIntegral (idx+1)
 
 loadGlobal :: Throws (Located GeneratorError) e => Id -> FieldType -> GenerateJvm e ()
 loadGlobal name t = do
@@ -173,6 +176,14 @@ getFunctionSig name table = do
         return $ MethodSignature (map getJvmType argTypes)
                                  (Returns $ getJvmType retType)
     _ -> failCheck GeneratorError $ "Invalid function type: " ++ show t
+
+getProcedureSig :: Throws (Located GeneratorError) e => Id -> SymbolTable -> GenerateJvm e MethodSignature
+getProcedureSig name table = do
+  t <- getSymbolType name table
+  case t of
+    TFunction argTypes TVoid ->
+        return $ MethodSignature (map getJvmType argTypes) ReturnsVoid
+    _ -> failCheck GeneratorError $ "Invalid procedure type: " ++ show t
 
 instance CodeGen (Expression :~ TypeAnn) where
   generate e@(content -> Variable name) = do
@@ -216,4 +227,35 @@ instance CodeGen (Expression :~ TypeAnn) where
     let t = getJvmType (typeOfA e)
     instruction <- getInstruction' "expression type" t fn
     liftG $ J.i0 instruction
+
+assign :: (Throws (Located GeneratorError) e, CodeGen val) => LValue :~ TypeAnn -> val -> GenerateJvm e ()
+assign e@(content -> LVariable name) value = do
+  prog <- gets programName
+  symbol <- getSymbol name (getActualSymbols e)
+  let t = getJvmType $ symbolType symbol
+  if symbolContext symbol == Outside
+    then do
+      liftG $ J.aload_ I0
+      generate value
+      let nt = NameType (toBS name) t
+      liftG $ J.putField (toBS prog) nt
+    else do
+      generate value
+      instruction <- getInstruction "variable type" t tiStore
+      liftG $ J.i0 $ instruction (fromIntegral $ symbolIndex symbol + 1)
+
+instance CodeGen (Statement :~ TypeAnn) where
+  generate e@(content -> Assign lvalue expr) = do
+    assign lvalue expr 
+
+  generate e@(content -> Procedure name args) = do
+    forM_ args generate
+    prog <- gets programName
+    sig <- getProcedureSig name (getActualSymbols e)
+    liftG $ J.invokeVirtual (toBS prog) $ NameType (toBS name) sig
+
+  generate e@(content -> Return expr) = do
+    generate expr
+    liftG $ J.i0 RETURN
+                                                            
 

@@ -283,14 +283,23 @@ findField name pairs = go 1 pairs
          | k == name = Just (i, v)
          | otherwise = go (i+1) other
 
+ensureNotConst :: Throws (Located TypeError) e => Id -> Check e ()
+ensureNotConst name = do
+    sym <- getSymbol name
+    case symbolConstValue sym of
+      Just _ -> failCheck ConstLValue name
+      Nothing -> return ()
+
 instance Typed LValue where
   typeCheck v@(content -> LVariable name) = do
     setPos v
     sym <- getSymbol name
+    ensureNotConst name
     returnT (symbolType sym) v (LVariable name)
 
   typeCheck v@(content -> LArray name ix) = do
     setPos v
+    ensureNotConst name
     sym <- getSymbol name
     case symbolType sym of
       TArray _ tp -> do
@@ -302,6 +311,7 @@ instance Typed LValue where
 
   typeCheck v@(content -> LField base field) = do
     setPos v
+    ensureNotConst base
     baseSym <- getSymbol base
     case symbolType baseSym of
       TRecord _ pairs -> case findField field pairs of
