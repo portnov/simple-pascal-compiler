@@ -14,13 +14,6 @@ import Text.Parsec hiding (State)
 import Language.Pascal.Types
 import Language.Pascal.Parser
 
--- | Look up for named symbol
-lookupSymbol :: Id -> SymbolTable -> Maybe Symbol
-lookupSymbol name table =
-  case filter isJust $ map (M.lookup name) table of
-    [] -> Nothing
-    (s:_) -> s
-
 isSubtypeOf :: Type -> Type -> Bool
 isSubtypeOf TVoid TVoid = True
 isSubtypeOf TVoid _ = False
@@ -54,13 +47,15 @@ isFor (ForLoop _ _) = True
 isFor _             = False
 
 returnT :: Throws (Located TypeError) e => Type -> Annotate node1 SrcPos -> node -> Check e (Annotate node TypeAnn)
-returnT t x res =
+returnT t x res = do
+  syms <- gets symbolTable
   return $ Annotate res $ TypeAnn {
              srcPos = SrcPos {
                         srcLine = srcLine (annotation x),
                         srcColumn = srcColumn (annotation x) },
              typeOf = t,
-             localSymbols = M.empty}
+             localSymbols = M.empty,
+             allSymbols = syms }
 
 instance Throws (Located TypeError) e => Checker (Check e) where
   type GeneralError (Check e) = TypeError
@@ -98,12 +93,12 @@ checkType :: Throws (Located TypeError) e => Type -> Check e Type
 checkType (TArray sz t) = do
     t' <- checkType t
     return (TArray sz t')
-checkType (TRecord pairs) = withSymbolTable $ do
+checkType (TRecord name pairs) = withSymbolTable $ do
     pairs' <- forM pairs $ \(n,t) -> do
                 t' <- checkType t
                 addSymbol $ Annotate (n # t') (SrcPos 0 0)
                 return (n, t')
-    return (TRecord pairs')
+    return (TRecord name pairs')
 checkType (TUser name) = do
     types <- gets userTypes
     case M.lookup name types of
@@ -130,13 +125,18 @@ getSymbol name = do
     Just s  -> return s
 
 addSymbol :: Throws (Located TypeError) e => Annotate Symbol SrcPos -> Check e ()
-addSymbol (Annotate (Symbol {..}) (SrcPos {..})) = do
+addSymbol (Annotate symbol@(Symbol {..}) (SrcPos {..})) = do
   st <- get
   (current:other) <- gets symbolTable
+  cx <- gets (head . contexts)
   case M.lookup symbolName current of
     Just s -> failCheck SymbolAlreadyDefined $ showSymbol s
     Nothing -> do
-      let new = M.insert symbolName (Symbol symbolName symbolType srcLine srcColumn) current
+      let newSymbol = symbol {symbolContext = cx,
+                              symbolIndex = M.size current,
+                              symbolDefLine = srcLine,
+                              symbolDefCol = srcColumn}
+      let new = M.insert symbolName newSymbol current
       put $ st {symbolTable = (new:other)}
 
 addSymbolTable :: Throws (Located TypeError) e => Check e ()
@@ -210,10 +210,12 @@ addConst name e = do
     Just c  -> failCheck ConstantAlreadyDefined (name, show c)
     Nothing -> do
       val <- evalConst e
+      syms <- gets symbolTable
       let result = Annotate (Literal val) $ TypeAnn {
                      srcPos = annotation e,
                      typeOf = litType val,
-                     localSymbols = M.empty }
+                     localSymbols = M.empty,
+                     allSymbols = syms }
       put $ st {userConsts = (name, result): consts}
       return result
 
@@ -222,11 +224,14 @@ instance Typed Program where
       setPos p
       consts' <- inContext Outside $
                    forM consts $ \(n,v) -> do
-                     v' <- addConst n v
+                     v'@(content -> Literal val) <- addConst n v
                      let sym = Annotate {
                                  content = Symbol {
                                    symbolName = n,
                                    symbolType = typeOfA v',
+                                   symbolConstValue = Just val,
+                                   symbolContext = Outside,
+                                   symbolIndex = 0, -- will be re-writen in addSymbol
                                    symbolDefLine = srcLine   (annotation v),
                                    symbolDefCol  = srcColumn (annotation v) },
                                  annotation = annotation v }
@@ -250,10 +255,13 @@ instance Typed Program where
       body' <- inContext ProgramBody $
                  forM body typeCheck
       let program = Program consts' (M.fromList types') (map errorOnUserTypeSymbol vars') fns' body'
+      syms <- gets symbolTable
+      let newSymbols = makeSymbolTable vars'
       return $ Annotate program $ TypeAnn {
         srcPos = SrcPos 0 0,
         typeOf = TVoid,
-        localSymbols = makeSymbolTable vars'}
+        localSymbols = newSymbols,
+        allSymbols = newSymbols : syms }
     where
       argTypes :: Function TypeAnn -> [Type]
       argTypes (Function {..}) = map symbolTypeC fnFormalArgs
@@ -296,9 +304,9 @@ instance Typed LValue where
     setPos v
     baseSym <- getSymbol base
     case symbolType baseSym of
-      TRecord pairs -> case findField field pairs of
-                         Just (ix,t) -> returnT (TField ix t) v (LField base field)
-                         Nothing -> failCheck NoSuchField (base, field)
+      TRecord _ pairs -> case findField field pairs of
+                           Just (ix,t) -> returnT (TField ix t) v (LField base field)
+                           Nothing -> failCheck NoSuchField (base, field)
       x -> failCheck NotARecord (base, x)
 
 instance Typed Statement where
@@ -393,7 +401,11 @@ instance Typed Function where
         let fn = Function fnName args fnResultType vars body
             tp = TFunction (map typeOfA args) fnResultType
         Annotate result ta <- returnT fnResultType x fn
-        return $ Annotate result $ ta {localSymbols = makeSymbolTable vars}
+        let newSymbols = makeSymbolTable vars
+        return $ Annotate result $ ta {
+                                    localSymbols = newSymbols,
+                                    allSymbols = newSymbols : allSymbols ta
+                                   }
 
 instance Typed Expression where
   typeCheck e@(content -> Variable x) = do
@@ -416,9 +428,9 @@ instance Typed Expression where
     setPos e
     baseSym <- getSymbol base
     case symbolType baseSym of
-      TRecord pairs -> case findField field pairs of
-                         Just (ix,t) -> returnT (TField ix t) e (RecordField base field)
-                         Nothing -> failCheck NoSuchField (base, field)
+      TRecord _ pairs -> case findField field pairs of
+                           Just (ix,t) -> returnT (TField ix t) e (RecordField base field)
+                           Nothing -> failCheck NoSuchField (base, field)
       TField ix t -> returnT (TField ix t) e (RecordField base field)
       x -> failCheck NotARecord (base, x)
 

@@ -15,6 +15,7 @@ import Language.Pascal.SSVM.Builtin
 
 instance Throws (Located GeneratorError) e => Checker (Generate e) where
   type GeneralError (Generate e) = GeneratorError
+
   enterContext c = do
     st <- get
     put $ st {currentContext = c: currentContext st}
@@ -165,12 +166,12 @@ instance CodeGen (Expression :~ TypeAnn) where
   generate e@(content -> RecordField base field) = do
     rec <- getFullName base
     case typeOfA e of
-      TRecord pairs -> case findFieldIndex field pairs of
-                         Just ix -> do
-                           i (CALL rec)
-                           push ix
-                           i READ_ARRAY
-                         Nothing -> failCheck GeneratorError $ "Internal error: no such field in " ++ base ++ " record: " ++ field
+      TRecord _ pairs -> case findFieldIndex field pairs of
+                           Just ix -> do
+                             i (CALL rec)
+                             push ix
+                             i READ_ARRAY
+                           Nothing -> failCheck GeneratorError $ "Internal error: no such field in " ++ base ++ " record: " ++ field
       TField ix _ -> do
           i (CALL rec)
           push ix
@@ -237,12 +238,12 @@ instance CodeGen (LValue :~ TypeAnn) where
   generate v@(content -> LField base field) = do
     var <- getFullName base
     case typeOfA v of
-      TRecord pairs -> case findFieldIndex field pairs of
-                         Just ix -> do
-                           i (CALL var)
-                           push ix
-                           i ASSIGN_ARRAY
-                         Nothing -> failCheck GeneratorError $ "Internal error: no such field in " ++ base ++ " record: " ++ field
+      TRecord _ pairs -> case findFieldIndex field pairs of
+                           Just ix -> do
+                             i (CALL var)
+                             push ix
+                             i ASSIGN_ARRAY
+                           Nothing -> failCheck GeneratorError $ "Internal error: no such field in " ++ base ++ " record: " ++ field
       TField ix _ -> do
         i (CALL var)
         push ix
@@ -369,10 +370,10 @@ instance CodeGen (Program TypeAnn) where
                          push sz
                          i (CALL fullName)
                          i ARRAY
-          TRecord pairs -> do
-                         push (length pairs)
-                         i (CALL fullName)
-                         i ARRAY
+          TRecord _ pairs -> do
+                             push (length pairs)
+                             i (CALL fullName)
+                             i ARRAY
           _ -> return ()
 
       allocIfNeeded name tp = do

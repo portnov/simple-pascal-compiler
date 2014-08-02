@@ -72,13 +72,17 @@ pVars = do
 
 pTypes :: Parser [(Id, Type)]
 pTypes = do
-  reserved "type"
-  many1 $ do
-    name <- identifier
-    reservedOp "="
-    tp <- pType
-    semi
-    return (name, content tp)
+    reserved "type"
+    res <- many1 $ do
+              name <- identifier
+              reservedOp "="
+              tp <- pType
+              semi
+              return (name, content tp)
+    return $ map rename res
+  where
+    rename (name, TRecord _ fs) = (name, TRecord (Just name) fs)
+    rename x = x
 
 pConsts :: Parser [(Id, Expression :~ SrcPos)]
 pConsts = do
@@ -117,7 +121,7 @@ pType = try arrayType <|> try recordType <|> simpleType
       reserved "record"
       fields <- field `sepEndBy1` semi
       reserved "end"
-      return (TRecord fields)
+      return (TRecord Nothing fields)
 
     field = do
       name <- identifier

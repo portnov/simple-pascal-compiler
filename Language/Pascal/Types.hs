@@ -32,9 +32,11 @@ instance Show SrcPos where
 
 -- | Node type info
 data TypeAnn = TypeAnn {
-  srcPos :: SrcPos,
-  typeOf :: Type,
-  localSymbols :: M.Map Id Symbol }
+    srcPos :: SrcPos
+  , typeOf :: Type
+  , localSymbols :: M.Map Id Symbol
+  , allSymbols :: SymbolTable
+  }
   deriving (Eq, Show)
 
 -- | Recursive annotated type
@@ -45,7 +47,8 @@ withType :: Annotate a SrcPos -> Type -> Annotate a TypeAnn
 withType (Annotate x pos) t = Annotate x $ TypeAnn {
   srcPos   = pos,
   typeOf   = t,
-  localSymbols = M.empty}
+  localSymbols = M.empty,
+  allSymbols = [] }
 
 setType :: Annotate Symbol a -> Type -> Annotate Symbol a
 setType (Annotate s pos) t = Annotate (s {symbolType = t}) pos
@@ -79,10 +82,13 @@ type SymbolTable = [M.Map Id Symbol]
 
 -- | A symbol
 data Symbol = Symbol {
-  symbolName :: Id,
-  symbolType :: Type,
-  symbolDefLine :: Int, -- ^ Source line where symbol was defined
-  symbolDefCol :: Int   -- ^ Source column
+    symbolName :: Id
+  , symbolType :: Type
+  , symbolConstValue :: Maybe Lit
+  , symbolContext :: Context
+  , symbolIndex :: Int   -- ^ Index of symbol in corresponding symbol table
+  , symbolDefLine :: Int -- ^ Source line where symbol was defined
+  , symbolDefCol :: Int   -- ^ Source column
   }
   deriving (Eq)
 
@@ -103,11 +109,21 @@ symbolTypeC = symbolType . content
 typeOfA ::  Annotate node TypeAnn -> Type
 typeOfA = typeOf . annotation
 
+getActualSymbols :: Annotate node TypeAnn -> SymbolTable
+getActualSymbols = allSymbols . annotation
+
+lookupSymbol :: Id -> SymbolTable -> Maybe Symbol
+lookupSymbol name table =
+  msum $ map (M.lookup name) table
+
 -- | Make symbol from it's name and type
 (#) :: Id -> Type -> Symbol
 name # tp = Symbol {
   symbolName = name,
   symbolType = tp,
+  symbolConstValue = Nothing,
+  symbolContext = Unknown,
+  symbolIndex = 0,
   symbolDefLine = 0,
   symbolDefCol = 0 }
 
@@ -120,7 +136,7 @@ data Type =
   | TUser Id              -- ^ user defined type
   | TAny                  -- ^ any value (dynamic typing)
   | TArray Integer Type   -- ^ array of some type
-  | TRecord [(Id, Type)]  -- ^ record
+  | TRecord (Maybe Id) [(Id, Type)]  -- ^ record
   | TField Int Type       -- ^ record field: field index and type
   | TFunction [Type] Type -- ^ formal arguments types and return type
   deriving (Eq, Typeable)
@@ -133,7 +149,7 @@ instance Show Type where
   show (TUser s) = s
   show TAny     = "any"
   show (TArray sz t) = printf "array [%d] of %s" sz (show t)
-  show (TRecord pairs) = "record " ++ intercalate ", " (map s pairs) ++ " end"
+  show (TRecord _ pairs) = "record " ++ intercalate ", " (map s pairs) ++ " end"
     where
       s (i,t) = i ++ ": " ++ show t
   show (TField _ t) = "record field of type " ++ show t
