@@ -19,11 +19,6 @@ import qualified JVM.Builder as J
 import JVM.Assembler
 import JVM.ClassFile
 
-data JvmType =
-    JInteger
-  | JReference String
-  deriving (Eq, Ord, Show)
-
 data TypeInstructions = TypeInstructions {
     tiLoad :: Word8 -> Instruction
   , tiStore :: Word8 -> Instruction
@@ -35,20 +30,20 @@ data TypeInstructions = TypeInstructions {
   , tiDiv :: Maybe Instruction
   } 
 
-instructionsByType :: M.Map JvmType TypeInstructions
-instructionsByType = M.fromList [
-    (JInteger, TypeInstructions ILOAD ISTORE IALOAD IASTORE
+instructionsByType :: [(FieldType, TypeInstructions)]
+instructionsByType = [
+    (IntType, TypeInstructions ILOAD ISTORE IALOAD IASTORE
                     (Just IADD) (Just ISUB) (Just IMUL) (Just IDIV))
   ]
 
-getInstruction :: Throws (Located GeneratorError) e => String -> JvmType -> (TypeInstructions -> a) -> GenerateJvm e a
+getInstruction :: Throws (Located GeneratorError) e => String -> FieldType -> (TypeInstructions -> a) -> GenerateJvm e a
 getInstruction msg t fn = do
   let msg' = "Unsupported " ++ msg ++ ": " ++ show t
-  case M.lookup t instructionsByType of
-    Nothing -> failCheck GeneratorError msg
+  case lookup t instructionsByType of
+    Nothing -> failCheck GeneratorError msg'
     Just i -> return $ fn i
 
-getInstruction' :: Throws (Located GeneratorError) e => String -> JvmType -> (TypeInstructions -> Maybe a) -> GenerateJvm e a
+getInstruction' :: Throws (Located GeneratorError) e => String -> FieldType -> (TypeInstructions -> Maybe a) -> GenerateJvm e a
 getInstruction' msg t fn = do
   x <- getInstruction msg t fn
   let msg' = "Unsupported " ++ msg ++ ": " ++ show t
@@ -56,18 +51,18 @@ getInstruction' msg t fn = do
     Nothing -> failCheck GeneratorError msg'
     Just i -> return i
 
-getJvmType :: Type -> JvmType
-getJvmType TInteger = JInteger
-getJvmType TBool = JInteger
-getJvmType (TRecord (Just name) _) = JReference name
+getJvmType :: Type -> FieldType
+getJvmType TInteger = IntType
+getJvmType TBool = BoolType
+getJvmType (TRecord (Just name) _) = ObjectType name
 
 toBS :: String -> L.ByteString
 toBS str = L.fromStrict $ B.pack $ map (fromIntegral . ord) str
 
--- data Local = Local Int JvmType
+-- data Local = Local Int FieldType
 --   deriving (Eq, Show)
 
--- data Global = Global JvmType
+-- data Global = Global FieldType
 --   deriving (Eq, Show)
 
 data GCState = GCState {
@@ -139,17 +134,13 @@ pushConst (LString s) = liftG $ J.loadString s
 class CodeGen a where
   generate :: Throws (Located GeneratorError) e => a -> GenerateJvm e ()
 
--- newLocal :: String -> Type -> GenerateJvm e Local
--- newLocal name t = do
---   let jt = getJvmType t
---   vars <- gets localVariables
---   let idx = M.size vars
---       var = Local idx jt
---       vars' = M.insert name var vars
---   modify $ \st -> st {localVariables = vars'}
---   return var
+getSymbolType :: Throws (Located GeneratorError) e => Id -> SymbolTable -> GenerateJvm e Type
+getSymbolType name table = do
+  case lookupSymbol name table of
+    Nothing -> failCheck GeneratorError $ "Unknown symbol: " ++ name
+    Just symbol -> return $ symbolType symbol
 
-loadVariable :: Throws (Located GeneratorError) e => String -> SymbolTable -> GenerateJvm e ()
+loadVariable :: Throws (Located GeneratorError) e => Id -> SymbolTable -> GenerateJvm e ()
 loadVariable name table = do
   case lookupSymbol name table of
     Nothing -> failCheck GeneratorError $ "Unknown variable: " ++ name
@@ -160,39 +151,59 @@ loadVariable name table = do
                      then loadGlobal name (getJvmType $ symbolType symbol)
                      else loadLocal (symbolIndex symbol) (getJvmType $ symbolType symbol)
 
-loadLocal :: Throws (Located GeneratorError) e => Int -> JvmType -> GenerateJvm e ()
+loadLocal :: Throws (Located GeneratorError) e => Int -> FieldType -> GenerateJvm e ()
 loadLocal idx t = do
   instruction <- getInstruction "local variable type" t tiLoad
   prog <- gets programName
   liftG $ 
     J.i0 $ instruction $ fromIntegral idx
 
-loadGlobal :: Throws (Located GeneratorError) e => Id -> JvmType -> GenerateJvm e ()
+loadGlobal :: Throws (Located GeneratorError) e => Id -> FieldType -> GenerateJvm e ()
 loadGlobal name t = do
   prog <- gets programName
   liftG $ do
     J.i0 $ ALOAD_ I0
-    J.getField (toBS prog) (NameType (toBS name) (getFieldSignature t))
+    J.getField (toBS prog) (NameType (toBS name) t)
 
-getFieldSignature :: JvmType -> Signature (Field Direct)
-getFieldSignature JInteger = IntType
-getFieldSignature (JReference t) = ObjectType t
+getFunctionSig :: Throws (Located GeneratorError) e => Id -> SymbolTable -> GenerateJvm e MethodSignature
+getFunctionSig name table = do
+  t <- getSymbolType name table
+  case t of
+    TFunction argTypes retType ->
+        return $ MethodSignature (map getJvmType argTypes)
+                                 (Returns $ getJvmType retType)
+    _ -> failCheck GeneratorError $ "Invalid function type: " ++ show t
 
 instance CodeGen (Expression :~ TypeAnn) where
   generate e@(content -> Variable name) = do
-    consts <- gets constants
-    case lookup name consts of
-      Just const -> pushConst const
-      Nothing -> loadVariable name (getActualSymbols e)
+      loadVariable name (getActualSymbols e)
 
   generate e@(content -> ArrayItem name ix) = do
-    generate $ (e {content = Variable name} :: Expression :~ TypeAnn)
+    loadVariable name (getActualSymbols e)
     generate ix
     let t = typeOfA e
     instruction <- getInstruction "array type" (getJvmType t) tiLoadArray
     liftG $ J.i0 instruction
 
+  generate e@(content -> RecordField base field) = do
+    baseType <- getSymbolType base (getActualSymbols e)
+    case baseType of
+      TRecord (Just name) fields -> do
+        case lookup field fields of
+          Nothing -> failCheck GeneratorError $ "Unknown record field: " ++ base ++ "." ++ field
+          Just fieldType -> do
+              loadVariable base (getActualSymbols e)
+              liftG $
+                J.getField (toBS base) (NameType (toBS field) (getJvmType fieldType))
+      _ -> failCheck GeneratorError $ "Invalid record type: " ++ show baseType
+
   generate e@(content -> Literal x) = pushConst x
+
+  generate e@(content -> Call name args) = do
+    prog <- gets programName
+    forM_ args generate
+    sig <- getFunctionSig name (getActualSymbols e)
+    liftG $ J.invokeVirtual (toBS prog) $ NameType (toBS name) sig
 
   generate e@(content -> Op op x y) = do
     generate x
