@@ -5,6 +5,7 @@ cabal install --dependencies-only
 cabal install
 cd ./spc-ssvm/
 cabal sandbox init --sandbox=../.cabal-sandbox/
+cabal install ../../binary-state/
 cabal install --dependencies-only
 cabal install
 cd ..

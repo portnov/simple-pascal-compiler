@@ -5,6 +5,5 @@
 *.bytecode
 *.class
 dist/
-spc
 cabal.sandbox.config
 .cabal-sandbox/

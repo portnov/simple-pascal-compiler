@@ -68,6 +68,9 @@ builtinSymbols = M.fromList $ map pair builtinFunctions
     pair (name, tp, _) = (name, Symbol {
                                  symbolName = name,
                                  symbolType = tp,
+                                 symbolConstValue = Nothing,
+                                 symbolContext = Outside,
+                                 symbolIndex = 0,
                                  symbolDefLine = 0,
                                  symbolDefCol = 0 })
 

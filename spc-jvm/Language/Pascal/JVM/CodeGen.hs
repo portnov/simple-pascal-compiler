@@ -1,4 +1,4 @@
-{-# LANGUAGE TypeSynonymInstances, TypeOperators, ViewPatterns, FlexibleInstances, RecordWildCards, FlexibleContexts, OverlappingInstances, GeneralizedNewtypeDeriving, MultiParamTypeClasses, DeriveDataTypeable, UndecidableInstances, TypeFamilies #-}
+{-# LANGUAGE TypeSynonymInstances, TypeOperators, ViewPatterns, FlexibleInstances, RecordWildCards, FlexibleContexts, OverlappingInstances, GeneralizedNewtypeDeriving, MultiParamTypeClasses, DeriveDataTypeable, UndecidableInstances, TypeFamilies, ScopedTypeVariables #-}
 
 module Language.Pascal.JVM.CodeGen where 
 
@@ -12,26 +12,23 @@ import qualified Data.ByteString.Lazy as L
 import Data.Char (ord)
 import Data.Generics
 import Data.Word
+import Data.Int
 
-import Language.Pascal.Types
 import qualified JVM.Builder as J
 import JVM.Assembler
 import JVM.ClassFile
+import JVM.Exceptions
+import qualified Java.Lang
+import qualified Java.IO
 
-data TypeInstructions = TypeInstructions {
-    tiLoad :: Word8 -> Instruction
-  , tiStore :: Word8 -> Instruction
-  , tiLoadArray :: Instruction
-  , tiStoreArray :: Instruction
-  , tiAdd :: Maybe Instruction
-  , tiSub :: Maybe Instruction
-  , tiMul :: Maybe Instruction
-  , tiDiv :: Maybe Instruction
-  } 
+import Language.Pascal.Types
+import Language.Pascal.JVM.Types
+import Language.Pascal.JVM.Builtin
 
 instructionsByType :: [(FieldType, TypeInstructions)]
 instructionsByType = [
     (IntType, TypeInstructions ILOAD ISTORE IALOAD IASTORE
+                    IRETURN (Just IF)
                     (Just IADD) (Just ISUB) (Just IMUL) (Just IDIV))
   ]
 
@@ -54,35 +51,10 @@ getJvmType :: Type -> FieldType
 getJvmType TInteger = IntType
 getJvmType TBool = BoolType
 getJvmType (TRecord (Just name) _) = ObjectType name
+getJvmType x = error $ "Unsupported type: " ++ show x
 
 toBS :: String -> L.ByteString
 toBS str = L.fromStrict $ B.pack $ map (fromIntegral . ord) str
-
--- data Local = Local Int FieldType
---   deriving (Eq, Show)
-
--- data Global = Global FieldType
---   deriving (Eq, Show)
-
-data GCState = GCState {
-    constants :: [(Id, Lit)]
-  , currentContext :: [Context]
-  , marks :: M.Map String Int
-  , programName :: String
-  } deriving (Eq, Show)
-
-emptyGCState :: String -> GCState
-emptyGCState name = GCState [] [] M.empty name
-
-newtype GenerateJvm e a = GenerateJvm {unJvm :: StateT GCState (J.Generate e) a}
-  deriving (Monad, MonadState GCState)
-
-liftG :: J.Generate e a -> GenerateJvm e a
-liftG run = GenerateJvm $ lift run
-
-instance J.GeneratorMonad (GenerateJvm e) where
-  getGState = GenerateJvm $ lift get
-  putGState = GenerateJvm . lift . put
 
 instance Throws (Located GeneratorError) e => Checker (GenerateJvm e) where
   type GeneralError (GenerateJvm e) = GeneratorError
@@ -125,13 +97,16 @@ getContextString = do
     isProgramPart (ForLoop _ _) = False
     isProgramPart _             = True
 
+newLabel :: GenerateJvm e String
+newLabel = do
+  last <- gets lastLabel
+  modify $ \st -> st {lastLabel = last + 1}
+  return $ "dummy__" ++ show last
+
 pushConst :: Lit -> GenerateJvm e ()
 pushConst (LInteger i) = liftG $ J.i8 LDC1 (CInteger $ fromIntegral i)
 pushConst (LBool b) = liftG $ J.i8 LDC1 (CInteger $ if b then 1 else 0)
 pushConst (LString s) = liftG $ J.loadString s
-
-class CodeGen a where
-  generate :: Throws (Located GeneratorError) e => a -> GenerateJvm e ()
 
 getSymbolType :: Throws (Located GeneratorError) e => Id -> SymbolTable -> GenerateJvm e Type
 getSymbolType name table = do
@@ -168,6 +143,10 @@ loadGlobal name t = do
     J.i0 $ ALOAD_ I0
     J.getField (toBS prog) (NameType (toBS name) t)
 
+getReturnSignature :: Type -> ReturnSignature
+getReturnSignature TVoid = ReturnsVoid
+getReturnSignature t = Returns $ getJvmType t
+
 getFunctionSig :: Throws (Located GeneratorError) e => Id -> SymbolTable -> GenerateJvm e MethodSignature
 getFunctionSig name table = do
   t <- getSymbolType name table
@@ -184,6 +163,12 @@ getProcedureSig name table = do
     TFunction argTypes TVoid ->
         return $ MethodSignature (map getJvmType argTypes) ReturnsVoid
     _ -> failCheck GeneratorError $ "Invalid procedure type: " ++ show t
+
+instance (CodeGen a) => CodeGen [a] where
+  generate list = forM_ list generate
+
+instance (CodeGen (a TypeAnn)) => CodeGen (a :~ TypeAnn) where
+  generate = generate . content
 
 instance CodeGen (Expression :~ TypeAnn) where
   generate e@(content -> Variable name) = do
@@ -211,10 +196,14 @@ instance CodeGen (Expression :~ TypeAnn) where
   generate e@(content -> Literal x) = pushConst x
 
   generate e@(content -> Call name args) = do
-    prog <- gets programName
-    forM_ args generate
-    sig <- getFunctionSig name (getActualSymbols e)
-    liftG $ J.invokeVirtual (toBS prog) $ NameType (toBS name) sig
+    case lookupBuiltin name of
+      Nothing -> do
+        prog <- gets programName
+        liftG $ J.aload_ I0
+        generate args
+        sig <- getFunctionSig name (getActualSymbols e)
+        liftG $ J.invokeVirtual (toBS prog) $ NameType (toBS name) sig
+      Just builtin -> builtin args
 
   generate e@(content -> Op op x y) = do
     generate x
@@ -249,13 +238,86 @@ instance CodeGen (Statement :~ TypeAnn) where
     assign lvalue expr 
 
   generate e@(content -> Procedure name args) = do
-    forM_ args generate
-    prog <- gets programName
-    sig <- getProcedureSig name (getActualSymbols e)
-    liftG $ J.invokeVirtual (toBS prog) $ NameType (toBS name) sig
+    case lookupBuiltin name of 
+      Nothing -> do
+        liftG $ J.aload_ I0
+        generate args
+        prog <- gets programName
+        sig <- getProcedureSig name (getActualSymbols e)
+        liftG $ J.invokeVirtual (toBS prog) $ NameType (toBS name) sig
+      Just builtin -> builtin args
 
   generate e@(content -> Return expr) = do
     generate expr
+    (InFunction _ retType:_) <- gets currentContext
+    let t = getJvmType retType
+    instruction <- getInstruction "return value type" t tiReturn
+    liftG $ J.i0 instruction
+
+  generate (content -> Exit) = do
     liftG $ J.i0 RETURN
-                                                            
+
+  generate (content -> IfThenElse condition ifStatements elseStatements) = do
+    generate condition
+    trueLabel <- newLabel
+    endIf <- newLabel
+    let t = getJvmType (typeOfA condition)
+    instruction <- getInstruction' "condition type" t tiIf
+    liftG $ instruction C_NE `J.useLabel` trueLabel
+    generate elseStatements
+    liftG $ GOTO `J.useLabel` endIf
+    liftG $ J.setLabel trueLabel
+    generate ifStatements
+    liftG $ J.setLabel endIf
+
+instance CodeGen (Function TypeAnn) where
+  generate (Function {..}) = do
+    inContext (InFunction fnName fnResultType) $ do
+      let argTypes = map (symbolType . content) fnFormalArgs
+          argSignature = map getJvmType argTypes
+          retSignature = getReturnSignature fnResultType
+      (J.newMethod [ACC_PUBLIC] (toBS fnName) argSignature retSignature $ do
+          J.setMaxLocals (fromIntegral $ length fnVars + 1)
+          J.setStackSize 20
+          generate fnBody
+          J.i0 RETURN )
+        `catchG`
+          (\(e :: UnresolvedLabel) -> fail $ "Internal error: " ++ show e)
+    return ()
+
+instance CodeGen (Program :~ TypeAnn) where
+  generate (content -> Program {..}) = do
+    prog <- gets (toBS . programName)
+    inContext Outside $ do
+      forM_ progVariables $ \var -> do
+        let t = getJvmType (symbolType $ content var)
+        liftG $ J.newField [ACC_PUBLIC] (toBS $ symbolName $ content var) t
+      forM_ progFunctions $ \fn ->
+        generate fn
+      init <- (J.newMethod [ACC_PUBLIC] (toBS "<init>") [] ReturnsVoid $ do
+                    J.setStackSize 1
+                    J.aload_ I0
+                    J.invokeSpecial Java.Lang.object Java.Lang.objectInit
+                    J.i0 RETURN )
+                  `catchG`
+                    (\(e :: UnresolvedLabel) -> fail $ "Internal error: " ++ show e)
+
+      realmain <- (J.newMethod [ACC_PUBLIC] (toBS "realmain") [J.arrayOf Java.Lang.stringClass] ReturnsVoid $ do
+                    J.setStackSize 20
+                    generate progBody
+                    J.i0 RETURN)
+                  `catchG`
+                    (\(e :: UnresolvedLabel) -> fail $ "Internal error: " ++ show e)
+      (J.newMethod [ACC_PUBLIC, ACC_STATIC] (toBS "main") [J.arrayOf Java.Lang.stringClass] ReturnsVoid $ do
+          J.setStackSize 22
+          liftG $ do
+            J.new prog
+            J.dup
+            J.invokeSpecial prog init
+            J.aload_ I0
+            J.invokeVirtual prog realmain
+            J.i0 RETURN )
+        `catchG`
+          (\(e :: UnresolvedLabel) -> fail $ "Internal error: " ++ show e)
+      return ()
 
