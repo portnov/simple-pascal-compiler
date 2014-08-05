@@ -10,6 +10,9 @@ var
 procedure test();
 begin
   y := x + 1;
+  if y = 0
+  then writeln(1)
+  else writeln(2);
   writeln(y);
 end;
 

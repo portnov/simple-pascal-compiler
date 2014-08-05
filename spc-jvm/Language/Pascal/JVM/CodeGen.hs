@@ -29,7 +29,10 @@ instructionsByType :: [(FieldType, TypeInstructions)]
 instructionsByType = [
     (IntType, TypeInstructions ILOAD ISTORE IALOAD IASTORE
                     IRETURN (Just IF)
-                    (Just IADD) (Just ISUB) (Just IMUL) (Just IDIV))
+                    (Just IADD) (Just ISUB) (Just IMUL) (Just IDIV)),
+    (BoolType, TypeInstructions ILOAD ISTORE IALOAD IASTORE
+                    IRETURN (Just IF)
+                    Nothing Nothing Nothing Nothing)
   ]
 
 getInstruction :: Throws (Located GeneratorError) e => String -> FieldType -> (TypeInstructions -> a) -> GenerateJvm e a
@@ -213,9 +216,24 @@ instance CodeGen (Expression :~ TypeAnn) where
                Sub -> tiSub
                Mul -> tiMul
                Div -> tiDiv
+               _ -> error $ "Unsupported binary operation: " ++ show op
     let t = getJvmType (typeOfA e)
     instruction <- getInstruction' "expression type" t fn
     liftG $ J.i0 instruction
+
+generateCondition (content -> Op op x y) label
+  | op `elem` [IsGT, IsLT, IsEQ, IsNE] = do
+    generate x
+    generate y
+    let op' = case op of
+                IsGT -> C_GT
+                IsLT -> C_LT
+                IsNE -> C_NE
+                IsEQ -> C_EQ
+    liftG $ IF_ICMP op' `J.useLabel` label
+generateCondition expr label = do
+  generate expr
+  liftG $ IF C_NE `J.useLabel` label
 
 assign :: (Throws (Located GeneratorError) e, CodeGen val) => LValue :~ TypeAnn -> val -> GenerateJvm e ()
 assign e@(content -> LVariable name) value = do
@@ -258,12 +276,10 @@ instance CodeGen (Statement :~ TypeAnn) where
     liftG $ J.i0 RETURN
 
   generate (content -> IfThenElse condition ifStatements elseStatements) = do
-    generate condition
     trueLabel <- newLabel
     endIf <- newLabel
     let t = getJvmType (typeOfA condition)
-    instruction <- getInstruction' "condition type" t tiIf
-    liftG $ instruction C_NE `J.useLabel` trueLabel
+    generateCondition condition trueLabel
     generate elseStatements
     liftG $ GOTO `J.useLabel` endIf
     liftG $ J.setLabel trueLabel
